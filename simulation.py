@@ -81,7 +81,7 @@ for i, (leak_point, leak_h, leak_r)  in enumerate(zip(leak_positions, sampleLeak
     signal_total[scenario_name] = signal['S']
     i = i + 1
     print(signal_total.head(5))
-    scenario_worst_impacts.append(24*200)
+    scenario_worst_impacts.append(24*100)
     scenario_names.append(scenario_name)
     scenario_probs.append(1/leak_positions.__len__())
 
@@ -134,11 +134,73 @@ results = impactform.solve(impact=min_det_time, sensor_budget=1000000,
                            sensor=sensor, scenario=scenario,
                              use_scenario_probability=True,
                            use_sensor_cost=True)
-# %%
+# %% eliminate non detected scenarios
+covered_scenario_number = int(np.where(results['Assessment']['Sensor'].values == None)[0][0])
+print('Detected scenarios: ', covered_scenario_number)
+scenario_names_cache = results['Assessment']['Scenario'].values[:covered_scenario_number]
+new_leak_positions = []
+new_sampleLeakHeights = []
+new_sampleLeakRates = []
+for detect_scenario in scenario_names_cache:
+    s_idx = int(detect_scenario.split('S')[-1])
+    leak_point = leak_positions[s_idx]
+    leak_h = sampleLeakHeights[s_idx]
+    leak_r = sampleLeakRates[s_idx]
+    new_leak_positions.append(leak_point)
+    new_sampleLeakHeights.append(leak_h)
+    new_sampleLeakRates.append(leak_r)
+#
+# %%  COVERED SIMULATION source
+source = chama.simulation.Source(25, 75, 1, 2)
+# %% atmospheric conditions
+atm = pd.DataFrame({'Wind Direction': [177.98,185.43,185.43,184.68,183.19,182.45,175.75,178.72,180.96,198.09,212.98,224.15,268.09,277.77,272.55,272.55,275.53,281.49,282.98,298.62,284.47,332.13,341.06,337.34],
+                    'Wind Speed': [6.72,8.87,9.73,9.27,7.43,6.73,6.05,6.36,7.89,8.78,9.09,8.29,8.44,8.93,8.38,10.71,7.95,7.64,6.17,6.26,5.65,8.63,7.83,7.18],
+                   'Stability Class': ['A']*24}, index=list(np.array(range(24))))
+# %% Initialize the Gaussian plume model
+gauss_plume = chama.simulation.GaussianPlume(grid, source, atm)
+gauss_plume.run()
+signal_vanilla = gauss_plume.conc
+signal_vanilla = signal_vanilla.drop(columns='S')
+print(signal_vanilla.head(5))
+# %% simulation covered scenarios
+scenario_worst_impacts = []
+scenario_names = []
+scenario_probs = []
+for i, (leak_point, leak_h, leak_r)  in enumerate(zip(new_leak_positions, new_sampleLeakHeights, new_sampleLeakRates)):
+    print('simulation: ', i)
+    # source
+    source = chama.simulation.Source(leak_point[0], leak_point[1], leak_h, leak_r)
+    gauss_plume = chama.simulation.GaussianPlume(grid, source, atm)
+    gauss_plume.run()
+    signal = gauss_plume.conc
+    scenario_name = 'S' + str(i)
+    signal_vanilla[scenario_name] = signal['S']
+    i = i + 1
+    print(signal_vanilla.head(5))
+    scenario_worst_impacts.append(24*100)
+    scenario_names.append(scenario_name)
+    scenario_probs.append(1/new_leak_positions.__len__())
+
+scenario =pd.DataFrame({'Scenario': scenario_names,'Undetected Impact': scenario_worst_impacts, 'Probability': scenario_probs})
+# %% extract detection time
+det_times = chama.impact.extract_detection_times(signal_vanilla, sensors)
+# print('det_times: ', det_times)
+# %% extract statistic of detection time
+det_time_stats = chama.impact.detection_time_stats(det_times)
+# %% extract the min detect time
+min_det_time = det_time_stats[['Scenario','Sensor','Min']]
+min_det_time = min_det_time.rename(columns={'Min':'Impact'})
+# %% optimization impact formulation
+impactform = chama.optimize.ImpactFormulation()
+results = impactform.solve(impact=min_det_time, sensor_budget=1000000,
+                           sensor=sensor, scenario=scenario,
+                             use_scenario_probability=True,
+                           use_sensor_cost=True)
+# %% optimization result
 print(results['Sensors'])
 print(results['Objective'])
 print(results['Assessment'])
-# %% plot sensor
+# %% arrange sensors for plot
 result_sensors = dict()
 count = 0
 for name_sensor in results['Sensors']:
@@ -158,9 +220,53 @@ for name_sensor in results['Sensors']:
     result_sensors[name_sensor] = stationary_pt_sensor
     print('count: ', count)
     count = count + 1
-# %%
+# %% plot sensor
 chama.graphics.sensor_locations(result_sensors)
-# %%
-results['Assessment'].head(52).plot(kind='bar')
+# %% impact static plot
+results['Assessment'].plot(kind='bar')
 plt.show()
+# %% atmospheric conditions + perturbation
+atm = pd.DataFrame({'Wind Direction': [177.98,185.43,185.43,184.68,183.19,182.45,175.75,178.72,180.96,198.09,212.98,224.15,268.09,277.77,272.55,272.55,275.53,281.49,282.98,298.62,284.47,332.13,341.06,337.34],
+                    'Wind Speed': [6.72,8.91,9.81,9.3,7.13,6.89,5.84,7.77,8.69,8.55,10,8.3,9,8.55,9.7,7.06,9.35,5.86,8.18,6.68,6.34,6.56,9.61,7.7,7.58],
+                   'Stability Class': ['A']*24}, index=list(np.array(range(24))))
+# %% Initialize the Gaussian plume model with perturbated wind
+gauss_plume = chama.simulation.GaussianPlume(grid, source, atm)
+gauss_plume.run()
+signal_noise = gauss_plume.conc
+signal_noise = signal_vanilla.drop(columns='S')
+print(signal_noise.head(5))
+# %% simulation covered scenarios with perturbated wind
+scenario_worst_impacts = []
+scenario_names = []
+scenario_probs = []
+for i, (leak_point, leak_h, leak_r)  in enumerate(zip(new_leak_positions, new_sampleLeakHeights, new_sampleLeakRates)):
+    print('simulation: ', i)
+    # source
+    source = chama.simulation.Source(leak_point[0], leak_point[1], leak_h, leak_r)
+    gauss_plume = chama.simulation.GaussianPlume(grid, source, atm)
+    gauss_plume.run()
+    signal = gauss_plume.conc
+    scenario_name = 'S' + str(i)
+    signal_noise[scenario_name] = signal['S']
+    i = i + 1
+    print(signal_noise.head(5))
+    scenario_worst_impacts.append(24*100)
+    scenario_names.append(scenario_name)
+    scenario_probs.append(1/new_leak_positions.__len__())
+
+scenario =pd.DataFrame({'Scenario': scenario_names,'Undetected Impact': scenario_worst_impacts, 'Probability': scenario_probs})
+# %% extract detection time with perturbated wind
+noise_det_times = chama.impact.extract_detection_times(signal_noise, sensors)
+# %% extract statistic of detection time with perturbated wind
+noise_det_time_stats = chama.impact.detection_time_stats(det_times)
+# %% extract the min detect time
+noise_min_det_time = det_time_stats[['Scenario','Sensor','Min']]
+noise_min_det_time = min_det_time.rename(columns={'Min':'Impact'})
+# %% optimization impact formulation with perturbated wind
+impactform = chama.optimize.ImpactFormulation()
+noise_optimal_results = impactform.solve(impact=noise_min_det_time, sensor_budget=1000000,
+                           sensor=sensor, scenario=scenario,
+                             use_scenario_probability=True,
+                           use_sensor_cost=True)
+
 
