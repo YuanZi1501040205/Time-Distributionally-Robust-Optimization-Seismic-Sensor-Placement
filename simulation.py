@@ -98,7 +98,7 @@ sensor_costs = []
 for i in range(9):
     for j in range(9):
         for m in range(10):
-            for n in range(2):
+            for n in range(1):
                 sensor_name = 'A_'+str(i)+'_'+str(j)+'_'+str(m)+'_'+str(n)
                 sensor_names.append(sensor_name)
                 pos = chama.sensors.Stationary(location=((i+1)*10,(j+1)*10,m))
@@ -130,7 +130,7 @@ min_det_time = det_time_stats[['Scenario','Sensor','Min']]
 min_det_time = min_det_time.rename(columns={'Min':'Impact'})
 # %% optimization impact formulation
 impactform = chama.optimize.ImpactFormulation()
-results = impactform.solve(impact=min_det_time, sensor_budget=1000000,
+results = impactform.solve(impact=min_det_time, sensor_budget=100000,
                            sensor=sensor, scenario=scenario,
                              use_scenario_probability=True,
                            use_sensor_cost=True)
@@ -192,7 +192,7 @@ min_det_time = det_time_stats[['Scenario','Sensor','Min']]
 min_det_time = min_det_time.rename(columns={'Min':'Impact'})
 # %% optimization impact formulation
 impactform = chama.optimize.ImpactFormulation()
-results = impactform.solve(impact=min_det_time, sensor_budget=1000000,
+results = impactform.solve(impact=min_det_time, sensor_budget=100000,
                            sensor=sensor, scenario=scenario,
                              use_scenario_probability=True,
                            use_sensor_cost=True)
@@ -221,10 +221,10 @@ for name_sensor in results['Sensors']:
     print('count: ', count)
     count = count + 1
 # %% plot sensor
-chama.graphics.sensor_locations(result_sensors)
+# chama.graphics.sensor_locations(result_sensors)
 # %% impact static plot
-results['Assessment'].plot(kind='bar')
-plt.show()
+# results['Assessment'].plot(kind='bar')
+# plt.show()
 # %% atmospheric conditions + perturbation
 atm = pd.DataFrame({'Wind Direction': [177.98,185.43,185.43,184.68,183.19,182.45,175.75,178.72,180.96,198.09,212.98,224.15,268.09,277.77,272.55,272.55,275.53,281.49,282.98,298.62,284.47,332.13,341.06,337.34],
                     'Wind Speed': [6.72,8.91,9.81,9.3,7.13,6.89,5.84,7.77,8.69,8.55,10,8.3,9,8.55,9.7,7.06,9.35,5.86,8.18,6.68,6.34,6.56,9.61,7.7,7.58],
@@ -264,7 +264,7 @@ noise_min_det_time = det_time_stats[['Scenario','Sensor','Min']]
 noise_min_det_time = min_det_time.rename(columns={'Min':'Impact'})
 # %% optimization impact formulation with perturbated wind
 impactform = chama.optimize.ImpactFormulation()
-noise_optimal_results = impactform.solve(impact=noise_min_det_time, sensor_budget=1000000,
+noise_optimal_results = impactform.solve(impact=noise_min_det_time, sensor_budget=100000,
                            sensor=sensor, scenario=scenario,
                              use_scenario_probability=True,
                            use_sensor_cost=True)
