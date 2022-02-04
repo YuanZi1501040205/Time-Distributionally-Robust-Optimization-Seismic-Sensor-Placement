@@ -444,13 +444,42 @@ dro_noise_det_time_stats = chama.impact.detection_time_stats(dro_noise_det_times
 min_dro_noise_det_time = dro_noise_det_time_stats[['Scenario','Sensor','Min']]
 min_dro_noise_det_time = min_dro_noise_det_time.rename(columns={'Min':'Impact'})
 
+# DRO on clean test
+# %% place stationary sensor based on the clean wind optimization result
+
+dro_clean_det_times = chama.impact.extract_detection_times(signal_vanilla, sensors)
+# %% extract statistic of detection time with perturbated wind
+dro_clean_det_time_stats = chama.impact.detection_time_stats(dro_clean_det_times)
+# %% extract the min detect time
+min_dro_clean_det_time = dro_clean_det_time_stats[['Scenario','Sensor','Min']]
+min_dro_clean_det_time = min_dro_clean_det_time.rename(columns={'Min':'Impact'})
+
 
 # %% noise optimization result
 print(results['Sensors'])
 print(results['Objective'])
 
-print('old strategy on noise objective function: ', min_naive_noise_det_time['Impact'].mean())
-print('new strategy on noise objective function: ', min_dro_noise_det_time['Impact'].mean())
+
+def impact2objective(min_det_time, num_scenarios = new_leak_positions.__len__()):
+    obj_detect = 0
+    for idx_scenario in range(num_scenarios):
+        obj_detect = obj_detect + min_det_time[min_det_time['Scenario']=='S'+str(idx_scenario)]['Impact'].min()
+    obj_detect = obj_detect/num_scenarios
+    return obj_detect
+
+obj_naive_optimal_normal = impact2objective(min_det_time, num_scenarios = new_leak_positions.__len__())
+obj_naive_optimal_noise = impact2objective(min_naive_noise_det_time, num_scenarios = new_leak_positions.__len__())
+obj_optimal_noise = impact2objective(noise_min_det_time, num_scenarios = new_leak_positions.__len__())
+obj_dro_normal = impact2objective(min_det_time_dro, num_scenarios = new_leak_positions.__len__())
+obj_dro_noise = impact2objective(min_dro_noise_det_time, num_scenarios = new_leak_positions.__len__())
+
+
+print('naive placement on noise objective function: ', obj_naive_optimal_noise)
+print('dro placement on noise objective function: ', obj_dro_noise)
+print('optimal placement on noise objective function: ', obj_optimal_noise)
+print('dro placement on clean objective function: ', obj_dro_normal)
+print('naive placement on clean objective function: ', obj_naive_optimal_normal)
+
 
 print(noise_optimal_results['Sensors'])
 print(noise_optimal_results['Objective'])
