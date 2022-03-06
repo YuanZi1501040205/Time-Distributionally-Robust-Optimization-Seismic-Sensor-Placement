@@ -3,7 +3,7 @@ import pandas as pd
 import chama
 import csv
 # %% define the grid
-TOTAL_SENARIO_NUM = 3000
+TOTAL_SENARIO_NUM = 50
 x_grid = np.linspace(0, 99, 100)
 y_grid = np.linspace(0, 99, 100)
 z_grid = np.linspace(0, 9, 10)
@@ -176,13 +176,13 @@ for i, (leak_point, leak_h, leak_r)  in enumerate(zip(new_leak_positions, new_sa
     signal = gauss_plume.conc
     scenario_name = 'S' + str(i)
     signal_vanilla[scenario_name] = signal['S']
-    i = i + 1
     print(signal_vanilla.head(5))
     scenario_worst_impacts.append(24*new_leak_positions.__len__())
     scenario_names.append(scenario_name)
     scenario_probs.append(1/new_leak_positions.__len__())
 
 scenario =pd.DataFrame({'Scenario': scenario_names,'Undetected Impact': scenario_worst_impacts, 'Probability': scenario_probs})
+
 # %% extract detection time
 det_times = chama.impact.extract_detection_times(signal_vanilla, sensors)
 # print('det_times: ', det_times)
@@ -319,11 +319,11 @@ print(noise_optimal_results['Sensors'])
 print(noise_optimal_results['Objective'])
 
 # %% DRO
-S = 1
-K = 1
-gamma = 0.8
-phi = (K/(2*S))*np.log(2*K/(1-gamma))
-
+S = 3
+K = 3
+gamma = 0.9
+kappa = (K/(2*S))*np.log(2*K/(1-gamma))
+print('kappa: ', kappa)
 # %%  COVERED SIMULATION source
 source = chama.simulation.Source(25, 75, 1, 2)
 # %% atmospheric conditions
