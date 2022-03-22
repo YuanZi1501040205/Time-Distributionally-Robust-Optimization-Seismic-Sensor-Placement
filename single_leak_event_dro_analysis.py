@@ -4,7 +4,7 @@ import chama
 from tqdm import tqdm
 from sympy import symbols, solve
 import matplotlib.pyplot as plt
-""" setting:  1 leak position, 1 leak rate, mutiple wind speed traces, 1 wind direction, output mutiple detect time for each sensor positions
+""" setting:  1 leak position, 1 leak rate, multiple wind speed traces, 1 wind direction, output mutiple detect time for each sensor positions
  1: plot sampled wind distribution and detected time distribution of some sensors.
  2: plot mean wind and associated time compared to the detected time distribution.
  3: plot DRO shifted max spike time distribution and compare to the sampled time distribution.
@@ -86,6 +86,7 @@ def Wasserstein_upper_bound(distribution, gamma=0.9):
     c = np.sum(distribution ** 2) - (kappa * len_distribution) ** 2
     f = a * dro_det_time ** 2 + b * dro_det_time + c
     result = solve(f)
+    result = complex(result[-1]).real
     return result
 
 # %% define the grid
@@ -162,7 +163,7 @@ dro_det_time_list = []
 for active_sensor in sensor_list:
     det_time_distribution = min_det_time_samples[min_det_time_samples['Sensor'] == active_sensor]['Impact'].values
     active_sensor_det_time_distribution_list.append(det_time_distribution)
-    active_sensor_dro_det_time = complex(Wasserstein_upper_bound(det_time_distribution, gamma=0.1)[-1]).real
+    active_sensor_dro_det_time = Wasserstein_upper_bound(det_time_distribution, gamma=0.1)
     dro_det_time_list.append(active_sensor_dro_det_time)
 
 # %% plot empirical distribution and the wasserstein upper bound distribution
