@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
  1. high sensitivity sensor->low detect time->even the wind has perturbation, the detection time has low variance
  2. low sensitivity sensor->low signal in grid points->many sensor candidators position can not detect any signal
  3. high confidential level->more conservative->bigger time delay shift for dro correction
+ 4. more samples->
  
 """
 
