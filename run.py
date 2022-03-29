@@ -137,7 +137,7 @@ def wasserstein_upper_bound(distribution, confidential_level=0.9):
     else:
         raise ValueError('wasserstein_distance is not upper bond.')
 
-    return upper_bound_result
+    return upper_bound_result[0]
 
 
 def eliminate_missing_leak_events(opt_results, leak_positions, leak_heights, leak_rates):
@@ -346,20 +346,22 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
     dro_sensors = []
     dro_impact = []
     for i in range(stat_df_min_det_time.__len__()):
-        # extract the most reliable sensor which detect the most samples
-        act_sensor_list_per_event = stat_df_min_det_time.iloc[i]['Sensor']
-        robust_sensor = pd.value_counts(act_sensor_list_per_event).keys()[0]
-        robust_sensor_idxs = list(np.where(act_sensor_list_per_event == robust_sensor)[0])
+        # extract the active sensors
+        # act_sensor_list_per_event = stat_df_min_det_time.iloc[i]['Sensor']
+        # robust_sensor = pd.value_counts(act_sensor_list_per_event).keys()[0]
+        # robust_sensor_idxs = list(np.where(act_sensor_list_per_event == robust_sensor)[0])
         # extract this sensor's impact distribution
-        impact_distribution = np.array([stat_df_min_det_time.iloc[i]['Impact'][j] for j in robust_sensor_idxs])
+        # impact_distribution = np.array([stat_df_min_det_time.iloc[i]['Impact'][j] for j in robust_sensor_idxs])
+        impact_distribution = stat_df_min_det_time.iloc[i]['Impact']
+
         # DRO impact correction
         robust_impact_value = wasserstein_upper_bound(impact_distribution, gamma)
 
-        dro_sensors.append(robust_sensor)
+        # dro_sensors.append(robust_sensor)
         dro_impact.append(robust_impact_value)
     # dro corrected detect impact dataframe
     min_det_time_dro = pd.DataFrame({'Scenario': scenario_stat_list,
-                                     'Sensor': list(dro_sensors),
+                                     'Sensor': sensor_stat_list,
                                      'Impact': list(dro_impact)})
     opt_result_dro = optimize_sensor(min_det_time_dro, sensor_cost_pairs_m, scenario_probs_m, sensor_budget)
     # %% evaluate dro placement strategy on test dataset
