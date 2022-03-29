@@ -4,6 +4,8 @@ import chama
 import csv
 from tqdm import tqdm
 from sympy import symbols, solve
+from scipy.stats import wasserstein_distance
+from scipy.optimize import fsolve
 
 
 def leak_simulation(grid, atmosphere, leak_positions, leak_heights, leak_rates, event_name='S'):
@@ -126,14 +128,15 @@ def wasserstein_upper_bound(distribution, confidential_level=0.9):
     H = len_distribution  # Number of bins for empirical distribution
     kappa = (H / (2 * S)) * np.log(2 * H / (1 - confidential_level))
 
-    # solve |x-d| = kappa wasserstein function (quadratic function choose max solution)
-    dro_det_time = symbols('dro_det_time')
-    a = len_distribution
-    b = -2 * np.sum(distribution)
-    c = np.sum(distribution ** 2) - (kappa * len_distribution) ** 2
-    f = a * dro_det_time ** 2 + b * dro_det_time + c
-    upper_bound_result = solve(f)
-    upper_bound_result = complex(upper_bound_result[-1]).real
+    def func(x):
+        return [wasserstein_distance([x[0]], distribution) - kappa]
+
+    spike_distribution = fsolve(func, [max(distribution)])
+    if spike_distribution >= np.mean(distribution):
+        upper_bound_result = spike_distribution
+    else:
+        raise ValueError('wasserstein_distance is not upper bond.')
+
     return upper_bound_result
 
 
@@ -387,7 +390,7 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
     # %% naive optimization placement (train on training dataset) test on testing dataset
 
     naive_opt_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs_m, scenario_samples_test,
-                                                  opt_result_dro['Sensors'])
+                                                  naive_opt_train_result['Sensors'])
     covered_scenario_number_naive_opt_test = int(np.where(
         naive_opt_test_result['Assessment']['Sensor'].values is not None)[0][-1] + 1)
     total_scenario_number_naive_opt_test = naive_opt_test_result['Assessment']['Sensor'].values.__len__()
@@ -407,8 +410,8 @@ if __name__ == "__main__":
 
     TOTAL_EVENTS_NUM_list = [50, 500, 1000]
     num_test_sample_list = [2, 8, 12, 16]
-    random_seed_list = [1947, 1997, 2008, 2022]
-    gamma_list = [0.7, 0.8, 0.9]
+    random_seed_list = [0, 1997, 2008, 2022]
+    gamma_list = [0.9, 0.8, 0.7]
 
     # good experiment result should be
     """
