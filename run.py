@@ -155,7 +155,7 @@ def eliminate_missing_leak_events(opt_results, leak_positions, leak_heights, lea
     return new_leak_positions, new_leak_heights, new_leak_rates
 
 
-def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
+def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma):
     # %% parameter and configuration preparing
     # environment: grid
     leak_pdf_file = './data/raw/leak_pdf.csv'
@@ -166,6 +166,7 @@ def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
     # gamma = 0.9
 
     TOTAL_EVENTS_NUM = TOTAL_EVENTS_NUM
+    num_train_sample = num_train_sample
     num_test_sample = num_test_sample
     random_seed = random_seed
     gamma = gamma
@@ -181,11 +182,13 @@ def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
     wind_direction = [177.98, 185.43, 185.43, 184.68, 183.19, 182.45, 175.75, 178.72, 180.96, 198.09, 212.98, 224.15,
                       268.09, 277.77, 272.55, 272.55, 275.53, 281.49, 282.98, 298.62, 284.47, 332.13, 341.06, 337.34]
     time_points = 24
-    atm_mean = pd.DataFrame({'Wind Direction': wind_speed_mean,
-                             'Wind Speed': wind_direction,
-                             'Stability Class': ['A'] * 24}, index=list(np.array(range(24))))
+    atm_mean = pd.DataFrame({'Wind Direction': wind_direction,
+                             'Wind Speed': wind_speed_mean,
+                             'Stability Class': ['A'] * time_points}, index=list(np.array(range(time_points))))
     # test wind speed samples
+    np.random.seed(random_seed)
     wind_speed_test = sample_wind_speed(num_test_sample, wind_speed_mean, wind_speed_std)
+    wind_speed_train = sample_wind_speed(num_train_sample, wind_speed_mean, wind_speed_std)
 
     # source: potential source location
     leak_positions_init = [[25, 75], [75, 75], [65, 60], [25, 50], [45, 50], [75, 50], [25, 25], [40, 35], [60, 45],
@@ -217,7 +220,7 @@ def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
     # sensor
     sensor_thsh = 0.1
     sensor_budget = 100000
-    # %% optimize sensor placement based on the mean wind speed
+    # %% optimize sensor placement based on the mean wind speed (mean optimization)|(basic dataset)
     """input grid, mean_atm, leak_positions, sampleLeakHeights, sampleLeakRates"""
 
     signals_m, scenario_m = leak_simulation(grid_init, atm_mean, leak_positions_init, leak_heights_init,
@@ -240,64 +243,45 @@ def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
     covered_scenario_number_m = int(np.where(opt_result_m['Assessment']['Sensor'].values != None)[0][-1] + 1)
     total_scenario_number_m = opt_result_m['Assessment']['Sensor'].values.__len__()
 
-    accuracy_basic = covered_scenario_number_m/total_scenario_number_m
+    accuracy_basic = covered_scenario_number_m / total_scenario_number_m
 
     # print('check optimization result on basic leak events set (associate to the mean wind sample trace)')
     # print('sensor placement for mean wind: ', opt_result_m['Sensors'])
     # print('Objective of mean sensor placement: ', opt_result_m['Objective'])
     # print('covered_scenario_number_m: ', covered_scenario_number_m)
     # print('total_scenario_number: ', total_scenario_number)
-    # %%  test on the noisy test data (perturbed wind speed)
+    # %%  test on the noisy test data: perturbation wind speed (basic dataset * number of testing samples)
     for i in tqdm(range(num_test_sample), leave=False):
-        # use perturbated wind speed
+        # use perturbation wind speed
         wind_speed = wind_speed_test[i]
-        atm = pd.DataFrame({'Wind Direction': wind_speed,
-                            'Wind Speed': wind_direction,
-                            'Stability Class': ['A'] * 24}, index=list(np.array(range(24))))
+        atm = pd.DataFrame({'Wind Direction': wind_direction,
+                            'Wind Speed': wind_speed,
+                            'Stability Class': ['A'] * time_points}, index=list(np.array(range(time_points))))
 
+        # current sample's impact dataframe-basic dataset with one wind sample (a line) for test
         signals, scenario = leak_simulation(grid_init, atm, leak_positions_set, leak_heights_set, leak_rates_set,
-                                            event_name='Sample' + str(i) + 'S')  #
-
+                                            event_name='Sample' + str(i) + '_S')
         min_det_time_currt_sample = extract_min_detect_time(signals, sensors)
-
         if i == 0:
             # prepare test events dataframe
-            scenario_samples = scenario
-            min_det_time_samples = min_det_time_currt_sample
+            scenario_samples_test = scenario
+            min_det_time_samples_test = min_det_time_currt_sample
             # prepare statistic distribution of detection for DRO correction
-            # scenario stat
-            scenario_stat = min_det_time_m['Scenario']
-            # sensors stat
-            sensors_stat = np.expand_dims(min_det_time_currt_sample['Sensor'].array, axis=1)
-            # impact stat
-            impact_stat = np.expand_dims(min_det_time_currt_sample['Impact'].array, axis=1)
         else:
             # prepare test events dataframe
-            scenario_samples = scenario_samples.append(scenario)
-            min_det_time_samples = min_det_time_samples.append(min_det_time_currt_sample)
+            scenario_samples_test = scenario_samples_test.append(scenario)
+            min_det_time_samples_test = min_det_time_samples_test.append(min_det_time_currt_sample)
+    # eval
+    scenario_samples_test['Probability'] = scenario_samples_test['Probability'] / scenario_samples_test.__len__()
+    mean_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs_m,
+                                             scenario_samples_test,
+                                             opt_result_m['Sensors'])
+    # %% check mean wind optimization result on testing events set (perturbation wind speed)
+    covered_scenario_number_m_test = int(np.where(
+        mean_test_result['Assessment']['Sensor'].values is not None)[0][-1] + 1)
+    total_scenario_number_m_test = mean_test_result['Assessment']['Sensor'].values.__len__()
 
-            # prepare statistic distribution of detection for DRO correction
-            # sensor stat
-            sensor_array = np.expand_dims(min_det_time_currt_sample['Sensor'].array, axis=1)
-            sensors_stat = np.concatenate((sensors_stat, sensor_array), axis=1)
-            # impact stat
-            impact_array = np.expand_dims(min_det_time_currt_sample['Impact'].array, axis=1)
-            impact_stat = np.concatenate((impact_stat, impact_array), axis=1)
-
-    scenario_samples['Probability'] = scenario_samples['Probability'] / scenario.__len__()
-    mean_method_on_noise_eval_result = eval_sensor_placement(min_det_time_samples, sensor_cost_pairs_m,
-                                                             scenario_samples,
-                                                             opt_result_m['Sensors'])
-
-    # statistic samples combine stat series to pandas dataframe
-    stat_df_min_det_time = pd.DataFrame({'Scenario': scenario_stat,
-                                         'Sensor': list(sensors_stat),
-                                         'Impact': list(impact_stat)})
-    # %% check mean wind optimization result on test events set (perturbated wind speed)
-    covered_scenario_number_m = int(
-        np.where(mean_method_on_noise_eval_result['Assessment']['Sensor'].values != None)[0][-1] + 1)
-    total_scenario_number_m = mean_method_on_noise_eval_result['Assessment']['Sensor'].values.__len__()
-    accuracy_m = covered_scenario_number_m / total_scenario_number_m
+    accuracy_m_test = covered_scenario_number_m_test / total_scenario_number_m_test
 
     # print('check mean wind optimization result on test events set (perturbated wind speed)')
     # print('sensor placement for mean wind: ', mean_method_on_noise_eval_result['Sensors'])
@@ -305,7 +289,57 @@ def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
     # print('covered_scenario_number_m: ', covered_scenario_number_m)
     # print('total_scenario_number: ', total_scenario_number_m)
     # print('accuracy of mean method: ', accuracy_m)
-    # %% optimize placement based on the DRO modified detect impact
+    # %% prepare samples stat for DRO training and multiple samples optimization method
+    impact_stat_dict = {}  # dictionary to store distribution of each event-sensor's impact
+    for i in tqdm(range(num_train_sample), leave=False):
+        # use perturbation wind speed
+        wind_speed = wind_speed_train[i]
+        atm = pd.DataFrame({'Wind Direction': wind_direction,
+                            'Wind Speed': wind_speed,
+                            'Stability Class': ['A'] * time_points}, index=list(np.array(range(time_points))))
+
+        # current sample's impact dataframe-basic dataset with one wind sample (a line) for train
+        signals, scenario = leak_simulation(grid_init, atm, leak_positions_set, leak_heights_set, leak_rates_set,
+                                            event_name='Sample' + str(i) + '_S')
+        min_det_time_currt_sample = extract_min_detect_time(signals, sensors)
+
+        # update distribution of each event-sensor pair
+        for j in tqdm(range(min_det_time_currt_sample.__len__())):
+            row = min_det_time_currt_sample.iloc[j]
+            name_sample_sensor_pair = row['Scenario'].split('_')[-1] + '|' + row['Sensor']
+            if name_sample_sensor_pair in impact_stat_dict:
+                impact_stat_dict[name_sample_sensor_pair].append(row['Impact'])
+
+            else:
+                impact_stat_dict[name_sample_sensor_pair] = [row['Impact']]
+
+        # training dataset build
+        if i == 0:
+            # prepare test events dataframe
+            scenario_samples_train = scenario
+            min_det_time_samples_train = min_det_time_currt_sample
+            # prepare statistic distribution of detection for DRO correction
+        else:
+            # prepare test events dataframe
+            scenario_samples_train = scenario_samples_train.append(scenario)
+            min_det_time_samples_train = min_det_time_samples_train.append(min_det_time_currt_sample)
+
+        # statistic dataframe of impact distributions (training dataset)
+        scenario_stat_list = []
+        sensor_stat_list = []
+        impact_stat_list = []
+        for item in impact_stat_dict:
+            scenario_name = item.split('|')[0]
+            sensor_name = item.split('|')[1]
+            impact_det = impact_stat_dict[item]
+            scenario_stat_list.append(scenario_name)
+            sensor_stat_list.append(sensor_name)
+            impact_stat_list.append(impact_det)
+
+        stat_df_min_det_time = pd.DataFrame({'Scenario': scenario_stat_list,
+                                             'Sensor': sensor_stat_list,
+                                             'Impact': impact_stat_list})
+    # %% DRO sensor placement on training dataset
     dro_sensors = []
     dro_impact = []
     for i in range(stat_df_min_det_time.__len__()):
@@ -316,23 +350,24 @@ def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
         # extract this sensor's impact distribution
         impact_distribution = np.array([stat_df_min_det_time.iloc[i]['Impact'][j] for j in robust_sensor_idxs])
         # DRO impact correction
-        robust_impact_value = wasserstein_upper_bound(impact_distribution, gamma=gamma)
+        robust_impact_value = wasserstein_upper_bound(impact_distribution, gamma)
 
         dro_sensors.append(robust_sensor)
         dro_impact.append(robust_impact_value)
     # dro corrected detect impact dataframe
-    min_det_time_dro = pd.DataFrame({'Scenario': scenario_stat,
+    min_det_time_dro = pd.DataFrame({'Scenario': scenario_stat_list,
                                      'Sensor': list(dro_sensors),
                                      'Impact': list(dro_impact)})
-    opt_result_dro = optimize_sensor(min_det_time_dro, sensor_cost_pairs_m, scenario_m, sensor_budget)
-    # %% evaluate dro placement strategy
-    dro_method_on_noise_eval_result = eval_sensor_placement(min_det_time_samples, sensor_cost_pairs_m, scenario_samples,
-                                                            opt_result_dro['Sensors'])
+    opt_result_dro = optimize_sensor(min_det_time_dro, sensor_cost_pairs_m, scenario_probs_m, sensor_budget)
+    # %% evaluate dro placement strategy on test dataset
+
+    dro_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs_m, scenario_samples_test,
+                                            opt_result_dro['Sensors'])
     # %% check dro optimization result on test events set (perturbated wind speed)
     covered_scenario_number_dro = int(
-        np.where(dro_method_on_noise_eval_result['Assessment']['Sensor'].values != None)[0][-1] + 1)
-    total_scenario_number_dro = dro_method_on_noise_eval_result['Assessment']['Sensor'].values.__len__()
-    accuracy_dro = covered_scenario_number_dro / total_scenario_number_dro
+        np.where(dro_test_result['Assessment']['Sensor'].values != None)[0][-1] + 1)
+    total_scenario_number_dro = dro_test_result['Assessment']['Sensor'].values.__len__()
+    accuracy_dro_test = covered_scenario_number_dro / total_scenario_number_dro
 
     # print('check dro optimization result on test events set (perturbated wind speed)')
     # print('sensor placement for mean wind: ', dro_method_on_noise_eval_result['Sensors'])
@@ -340,60 +375,105 @@ def main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma):
     # print('covered_scenario_number_dro: ', covered_scenario_number_dro)
     # print('total_scenario_number_dro: ', total_scenario_number_dro)
     # print('accuracy of dro method: ', accuracy_dro)
+    # %% naive optimization placement on training dataset
+    scenario_samples_train['Probability'] = scenario_samples_train['Probability'] / scenario_samples_train.__len__()
+    naive_opt_train_result = optimize_sensor(min_det_time_samples_train, sensor_cost_pairs_m,
+                                             scenario_samples_train, sensor_budget)
+    covered_scenario_number_naive_opt_train = int(np.where(
+        naive_opt_train_result['Assessment']['Sensor'].values is not None)[0][-1] + 1)
+    total_scenario_number_naive_opt_train = naive_opt_train_result['Assessment']['Sensor'].values.__len__()
+    accuracy_naive_opt_train = covered_scenario_number_naive_opt_train / total_scenario_number_naive_opt_train
 
-    result_list = [opt_result_m, mean_method_on_noise_eval_result, dro_method_on_noise_eval_result, accuracy_basic, accuracy_m, accuracy_dro]
+    # %% naive optimization placement (train on training dataset) test on testing dataset
+
+    naive_opt_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs_m, scenario_samples_test,
+                                                  opt_result_dro['Sensors'])
+    covered_scenario_number_naive_opt_test = int(np.where(
+        naive_opt_test_result['Assessment']['Sensor'].values is not None)[0][-1] + 1)
+    total_scenario_number_naive_opt_test = naive_opt_test_result['Assessment']['Sensor'].values.__len__()
+    accuracy_naive_opt_test = covered_scenario_number_naive_opt_test / total_scenario_number_naive_opt_test
+
+    # %%
+    result_list = [opt_result_m, mean_test_result, dro_test_result, naive_opt_test_result, naive_opt_train_result,
+                   accuracy_basic, accuracy_m_test, accuracy_dro_test, accuracy_naive_opt_train,
+                   accuracy_naive_opt_test]
     return result_list
+
 
 # %%
 
 
 if __name__ == "__main__":
 
-    TOTAL_EVENTS_NUM_list = [100, 500, 1000]
-    num_test_sample_list = [5, 10, 20]
+    TOTAL_EVENTS_NUM_list = [50, 500, 1000]
+    num_test_sample_list = [2, 8, 12, 16]
     random_seed_list = [1947, 1997, 2008, 2022]
     gamma_list = [0.7, 0.8, 0.9]
 
-    best_accuracy_gap_test_train = np.inf
-    best_accuracy_gap_dro_mean = 0
-    best_obj_gap_test_train = 0
-    best_obj_gap_dro_mean = np.inf
-    best_num_events = 0
+    # good experiment result should be
+    """
+    1. opt_result_m > mean_test_result (gap_1)
+    2. dro_test_result > naive_opt_test_result (gap_2)
+    3. dro_test_result >  mean_test_result (gap_3)
+    4. naive_opt_train_result > naive_opt_test_result (gap_4)
+    5. the smaller objective the better
+    6. the higher of accuracy the better
+    """
+    best_obj_gap_1 = np.inf
+    best_obj_gap_2 = np.inf
+    best_obj_gap_3 = np.inf
+    best_obj_gap_4 = np.inf
+
+    best_accuracy_gap_1 = 0
+    best_accuracy_gap_2 = 0
+    best_accuracy_gap_3 = 0
+    best_accuracy_gap_4 = 0
+
     for TOTAL_EVENTS_NUM in TOTAL_EVENTS_NUM_list:
         for num_test_sample in num_test_sample_list:
             for random_seed in random_seed_list:
                 for gamma in gamma_list:
-                    result_list = main(TOTAL_EVENTS_NUM, num_test_sample, random_seed, gamma)
+                    result_list = main(TOTAL_EVENTS_NUM, int(num_test_sample / 2), num_test_sample, random_seed, gamma)
 
-                    accracy_gap_test_train = result_list[-2] - result_list[-3]
-                    accracy_gap_dro_mean = result_list[-1] - result_list[-2]
-                    obj_gap_test_train = result_list[1]['Objective'] - result_list[0]['Objective']
-                    obj_gap_dro_mean = result_list[2]['Objective'] - result_list[1]['Objective']
-                    num_events = result_list[1]['Assessment']['Sensor'].values.__len__()
+                    obj_gap_1 = result_list[0]['Objective'] - result_list[1]['Objective']
+                    obj_gap_2 = result_list[2]['Objective'] - result_list[3]['Objective']
+                    obj_gap_3 = result_list[2]['Objective'] - result_list[1]['Objective']
+                    obj_gap_4 = result_list[4]['Objective'] - result_list[3]['Objective']
 
-                    if accracy_gap_test_train<=best_accuracy_gap_test_train and accracy_gap_dro_mean>=best_accuracy_gap_dro_mean and obj_gap_test_train>=best_obj_gap_test_train and obj_gap_dro_mean<=best_obj_gap_dro_mean and num_events>=best_num_events:
+                    accuracy_gap_1 = result_list[5] - result_list[6]
+                    accuracy_gap_2 = result_list[7] - result_list[8]
+                    accuracy_gap_3 = result_list[7] - result_list[6]
+                    accuracy_gap_4 = result_list[9] - result_list[8]
 
-                        best_accuracy_gap_test_train = accracy_gap_test_train
-                        best_accuracy_gap_dro_mean = accracy_gap_dro_mean
-                        best_obj_gap_test_train = obj_gap_test_train
-                        best_obj_gap_dro_mean = obj_gap_dro_mean
-                        best_num_events = num_events
+                    if obj_gap_1 <= best_obj_gap_1 and obj_gap_2 <= best_obj_gap_2 and obj_gap_3 <= best_obj_gap_3 and obj_gap_4 <= best_obj_gap_4 and accuracy_gap_1 >= best_accuracy_gap_1 and accuracy_gap_2 >= best_accuracy_gap_2 and accuracy_gap_3 >= best_accuracy_gap_3 and accuracy_gap_4 >= best_accuracy_gap_4:
+                        best_obj_gap_1 = obj_gap_1
+                        best_obj_gap_2 = obj_gap_2
+                        best_obj_gap_3 = obj_gap_3
+                        best_obj_gap_4 = obj_gap_4
 
-                        f2 = open('./best_parameters_log.txt','r+')
+                        best_accuracy_gap_1 = accuracy_gap_1
+                        best_accuracy_gap_2 = accuracy_gap_2
+                        best_accuracy_gap_3 = accuracy_gap_3
+                        best_accuracy_gap_4 = accuracy_gap_4
+
+                        f2 = open('./best_parameters_log.txt', 'r+')
                         f2.read()
-                        f2.write('\nbest_accuracy_gap_test_train')
-                        f2.write('\n' + best_accuracy_gap_test_train)
-                        f2.write('\nbest_accuracy_gap_dro_mean')
-                        f2.write('\n' + best_accuracy_gap_dro_mean)
-                        f2.write('\nbest_obj_gap_test_train')
-                        f2.write('\n' + best_obj_gap_test_train)
-                        f2.write('\nbest_obj_gap_dro_mean')
-                        f2.write('\n' + best_obj_gap_dro_mean)
-                        f2.write('\nbest_num_events')
-                        f2.write('\n' + best_num_events)
+                        f2.write('\nbest_obj_gap_1')
+                        f2.write('\n' + best_obj_gap_1)
+                        f2.write('\nbest_obj_gap_2')
+                        f2.write('\n' + best_obj_gap_2)
+                        f2.write('\nbest_obj_gap_3')
+                        f2.write('\n' + best_obj_gap_3)
+                        f2.write('\nbest_obj_gap_4')
+                        f2.write('\n' + best_obj_gap_4)
+                        f2.write('\nbest_accuracy_gap_1')
+                        f2.write('\n' + best_accuracy_gap_1)
+                        f2.write('\nbest_accuracy_gap_2')
+                        f2.write('\n' + best_accuracy_gap_2)
+                        f2.write('\nbest_accuracy_gap_3')
+                        f2.write('\n' + best_accuracy_gap_3)
+                        f2.write('\nbest_accuracy_gap_4')
+                        f2.write('\n' + best_accuracy_gap_4)
                         f2.write('\nbest parameters')
-                        f2.write('\n' + TOTAL_EVENTS_NUM + ' ' + num_test_sample + ' ' + random_seed+' ' + gamma)
+                        f2.write('\n' + TOTAL_EVENTS_NUM + ' ' + num_test_sample + ' ' + random_seed + ' ' + gamma)
                         f2.close()
-
-
-
