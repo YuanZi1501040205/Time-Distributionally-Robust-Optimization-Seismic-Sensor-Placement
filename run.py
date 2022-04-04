@@ -181,7 +181,8 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
     # environment: wind
     wind_speed_mean = [6.72, 8.87, 9.73, 9.27, 7.43, 6.73, 6.05, 6.36, 7.89, 8.78, 9.09, 8.29, 8.44, 8.93, 8.38, 10.71,
                        7.95, 7.64, 6.17, 6.26, 5.65, 8.63, 7.83, 7.18]
-    wind_speed_std = 1.3837437106919512
+    wind_speed_test_std = 1.3837437106919512
+    wind_speed_train_std = 0.6918718553459756
     wind_direction = [177.98, 185.43, 185.43, 184.68, 183.19, 182.45, 175.75, 178.72, 180.96, 198.09, 212.98, 224.15,
                       268.09, 277.77, 272.55, 272.55, 275.53, 281.49, 282.98, 298.62, 284.47, 332.13, 341.06, 337.34]
     time_points = 24
@@ -190,8 +191,8 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
                              'Stability Class': ['A'] * time_points}, index=list(np.array(range(time_points))))
     # test wind speed samples
     np.random.seed(random_seed)
-    wind_speed_test = sample_wind_speed(num_test_sample, wind_speed_mean, wind_speed_std)
-    wind_speed_train = sample_wind_speed(num_train_sample, wind_speed_mean, wind_speed_std)
+    wind_speed_test = sample_wind_speed(num_test_sample, wind_speed_mean, wind_speed_test_std)
+    wind_speed_train = sample_wind_speed(num_train_sample, wind_speed_mean, wind_speed_train_std)
 
     # source: potential source location
     leak_positions_init = [[25, 75], [75, 75], [65, 60], [25, 50], [45, 50], [75, 50], [25, 25], [40, 35], [60, 45],
@@ -400,8 +401,8 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
 
     # %%
     result_list = [opt_result_m, mean_test_result, dro_test_result, naive_opt_test_result, naive_opt_train_result,
-                   accuracy_basic, accuracy_m_test, accuracy_dro_test, accuracy_naive_opt_train,
-                   accuracy_naive_opt_test]
+                   accuracy_basic, accuracy_m_test, accuracy_dro_test,
+                   accuracy_naive_opt_test, accuracy_naive_opt_train]
     return result_list
 
 
@@ -410,10 +411,10 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
 
 if __name__ == "__main__":
 
-    TOTAL_EVENTS_NUM_list = [50, 500, 1000]
-    num_test_sample_list = [2, 8, 12, 16]
-    random_seed_list = [0, 1997, 2008, 2022]
-    gamma_list = [0.9, 0.8, 0.7]
+    TOTAL_EVENTS_NUM_list = [500, 1000]
+    num_test_sample_list = [16]
+    random_seed_list = [1997, 2022]
+    gamma_list = [0.9, 0.8]
 
     # good experiment result should be
     """
@@ -424,10 +425,10 @@ if __name__ == "__main__":
     5. the smaller objective the better
     6. the higher of accuracy the better
     """
-    best_obj_gap_1 = np.inf
-    best_obj_gap_2 = np.inf
-    best_obj_gap_3 = np.inf
-    best_obj_gap_4 = np.inf
+    best_obj_gap_1 = 0
+    best_obj_gap_2 = 0
+    best_obj_gap_3 = 0
+    best_obj_gap_4 = 0
 
     best_accuracy_gap_1 = 0
     best_accuracy_gap_2 = 0
@@ -463,22 +464,56 @@ if __name__ == "__main__":
 
                         f2 = open('./best_parameters_log.txt', 'r+')
                         f2.read()
-                        f2.write('\nbest_obj_gap_1')
-                        f2.write('\n' + best_obj_gap_1)
-                        f2.write('\nbest_obj_gap_2')
-                        f2.write('\n' + best_obj_gap_2)
-                        f2.write('\nbest_obj_gap_3')
-                        f2.write('\n' + best_obj_gap_3)
-                        f2.write('\nbest_obj_gap_4')
-                        f2.write('\n' + best_obj_gap_4)
-                        f2.write('\nbest_accuracy_gap_1')
-                        f2.write('\n' + best_accuracy_gap_1)
-                        f2.write('\nbest_accuracy_gap_2')
-                        f2.write('\n' + best_accuracy_gap_2)
-                        f2.write('\nbest_accuracy_gap_3')
-                        f2.write('\n' + best_accuracy_gap_3)
+                        # f2.write("\n result_list[0]['Objective']")
+                        # f2.write('\n ' + str(result_list[0]['Objective']))
+                        # f2.write("\n result_list[1]['Objective']")
+                        # f2.write('\n ' + str(result_list[1]['Objective']))
+                        # f2.write("\n result_list[2]['Objective']")
+                        # f2.write('\n ' + str(result_list[2]['Objective']))
+                        # f2.write("\n result_list[3]['Objective']")
+                        # f2.write('\n ' + str(result_list[3]['Objective']))
+                        # f2.write("\n result_list[4]['Objective']")
+                        # f2.write('\n ' + str(result_list[4]['Objective']))
+                        # f2.write("\n accuracy_gap_1")
+                        # f2.write('\n ' + str(accuracy_gap_1))
+                        # f2.write("\n accuracy_gap_2")
+                        # f2.write('\n ' + str(accuracy_gap_2))
+                        # f2.write("\n accuracy_gap_3")
+                        # f2.write('\n ' + str(accuracy_gap_3))
+                        # f2.write("\n accuracy_gap_4")
+                        # f2.write('\n ' + str(accuracy_gap_4))
+                        #
+                        # f2.write("\n result_list[0]['Sensors']")
+                        # f2.write('\n ' + str(result_list[0]['Sensors']))
+                        # f2.write("\n result_list[1]['Sensors']")
+                        # f2.write('\n ' + str(result_list[1]['Sensors']))
+                        # f2.write("\n result_list[2]['Sensors']")
+                        # f2.write('\n ' + str(result_list[2]['Sensors']))
+                        # f2.write("\n result_list[3]['Sensors']")
+                        # f2.write('\n ' + str(result_list[3]['Sensors']))
+                        # f2.write("\n result_list[4]['Sensors']")
+                        # f2.write('\n ' + str(result_list[4]['Sensors']))
+
+
+                        f2.write('\n best_obj_gap_1')
+                        f2.write('\n ' + str(best_obj_gap_1))
+                        f2.write('\n best_obj_gap_2')
+                        f2.write('\n ' + str(best_obj_gap_2))
+                        f2.write('\n best_obj_gap_3')
+                        f2.write('\n ' + str(best_obj_gap_3))
+                        f2.write('\n best_obj_gap_4')
+                        f2.write('\n ' + str(best_obj_gap_4))
+                        f2.write('\n best_accuracy_gap_1')
+                        f2.write('\n ' + str(best_accuracy_gap_1))
+                        f2.write('\n best_accuracy_gap_2')
+                        f2.write('\n ' + str(best_accuracy_gap_2))
+                        f2.write('\n best_accuracy_gap_3')
+                        f2.write('\n ' + str(best_accuracy_gap_3))
                         f2.write('\nbest_accuracy_gap_4')
-                        f2.write('\n' + best_accuracy_gap_4)
-                        f2.write('\nbest parameters')
-                        f2.write('\n' + TOTAL_EVENTS_NUM + ' ' + num_test_sample + ' ' + random_seed + ' ' + gamma)
+                        f2.write('\n ' + str(best_accuracy_gap_4))
+                        f2.write('\n best parameters')
+                        f2.write('\n ' + str(TOTAL_EVENTS_NUM) + ' ' + str(num_test_sample) + ' ' + str(
+                            random_seed) + ' ' + str(gamma))
                         f2.close()
+
+
