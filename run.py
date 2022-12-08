@@ -282,7 +282,7 @@ def gap_obj_f(num_train_sample, num_test_sample, random_seed, gamma, v_test_std,
         Sensor_name_list.append(name_sensor)
         sensor_cost_list.append(1000)
     sensor_cost_pairs = pd.DataFrame({'Sensor': Sensor_name_list, 'Cost': sensor_cost_list})
-    # %% optimization
+    #  optimization
     sens_budget = 9000
     mean_basic_results = optimize_sensor(min_det_time, sensor_cost_pairs, scenario_prob_basic, sens_budget)
     mean_sensor_place_strategy = mean_basic_results['Sensors']
@@ -478,6 +478,7 @@ def gap_obj_f(num_train_sample, num_test_sample, random_seed, gamma, v_test_std,
     result_list = [gap_1,  gap_2,gap_3,
                    gap_4, gap_5,
                    gap_6, gap_7]
+    return result_list
 
 
 
