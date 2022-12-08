@@ -1,100 +1,195 @@
 import numpy as np
 import pandas as pd
 import chama
-import csv
 from tqdm import tqdm
 from sympy import symbols, solve
-from scipy.stats import wasserstein_distance
-from scipy.optimize import fsolve
+import matplotlib.pyplot as plt
+import time
+import csv
+from psmodules import psarray, pssynthetic, psraytrace, pswavelet, \
+    psplot, pspicker, pspdf
+
+""" 
+1. Compare grid placement with SO placement when velocity is fixed.
+2. Compare SO placement with fixed and perturbed velocity
+3. DRO, SO, grid comparison
+
+"""
 
 
-def leak_simulation(grid, atmosphere, leak_positions, leak_heights, leak_rates, event_name='S'):
-    """input: grid, atmosphere model, leak lists"""
-    source = chama.simulation.Source(leak_positions[0][0], leak_positions[0][1], leak_heights[0],
-                                     leak_rates[0])
-    gauss_plume = chama.simulation.GaussianPlume(grid, source, atmosphere)
-    gauss_plume.run()
-    sigs = gauss_plume.conc
-    sigs = sigs.drop(columns='S')
-    # print(signals.head(5))
-    scenario_worst_impacts = []
-    scenario_names = []
-    scenario_probs = []
-    undetected_impact_scale = 100
-    total_simulation_scenario_num = leak_positions.__len__()
-    for idx, (leak_point, leak_h, leak_r) in tqdm(enumerate(zip(leak_positions, leak_heights, leak_rates)),
-                                                  total=len(leak_positions), leave=False):
-        # print('simulation: ', i)
-        source = chama.simulation.Source(leak_point[0], leak_point[1], leak_h, leak_r)
-        gauss_plume = chama.simulation.GaussianPlume(grid, source, atmosphere)
-        gauss_plume.run()
-        signal = gauss_plume.conc
-        scenario_name = event_name + str(idx)
-        sigs[scenario_name] = signal['S']
-        # print(signal.head(5))
-        scenario_worst_impacts.append(24 * undetected_impact_scale)
-        scenario_names.append(scenario_name)
-        scenario_probs.append(1 / total_simulation_scenario_num)
+def Wasserstein_upper_bound(distribution, num_bins=10, gamma=0.9):
+    # distribution: empirical distribution
+    # gamma: Confidence level
+    # (high gamma, more sample)->high shift
+    distribution = np.array(distribution)
+    len_distribution = float(distribution.__len__())
+    S = len_distribution # Number of historical data for empirical distribution
+    # H = len_distribution # Number of bins for empirical distribution
+    H = num_bins # Number of bins for empirical distribution
 
-    events = pd.DataFrame(
-        {'Scenario': scenario_names, 'Undetected Impact': scenario_worst_impacts, 'Probability': scenario_probs})
-    return sigs, events
+    kappa = (H / (2 * S)) * np.log(2 * H / (1 - gamma))
+
+    # solve |x-d| = kappa wasserstein function (quadratic function choose max solution)
+    dro_det_time = symbols('dro_det_time')
+    a = len_distribution
+    b = -2 * np.sum(distribution)
+    c = np.sum(distribution ** 2) - (kappa * len_distribution) ** 2
+    f = a * dro_det_time ** 2 + b * dro_det_time + c
+    result = solve(f)
+    result = complex(result[-1]).real
+    return result
 
 
-def sample_wind_speed(num_samples, wind_mean, wind_std):
+def sample_velocity_model(num_samples, vp_mean, vp_std):
     """sample wind speed traces from normal distribution(assumed true distribution of wind speed)"""
-    wind_speed_samples = []
+    vp_samples = []
     for sample_idx in range(num_samples):
-        wind_speed_trace = []
-        for i, (wind_speed_time_point) in enumerate(zip(wind_mean)):
-            wind_speed_trace.append(np.random.normal(wind_speed_time_point, wind_std)[0])
-        wind_speed_samples.append(wind_speed_trace)
-    return wind_speed_samples
+        vp_trace = []
+        for i, (wind_speed_time_point) in enumerate(zip(vp_mean)):
+            vp_trace.append(np.random.normal(wind_speed_time_point, vp_std)[0])
+        vp_samples.append(vp_trace)
+    return vp_samples
 
 
-def generate_sensor_candidates(sensor_threshold):
-    sensor_candidates = dict()
-    sensor_names = []
-    count = 0
-    sensor_costs = []
-    for i in range(9):
-        for j in range(9):
-            for m in range(10):
-                for n in range(1):
-                    sensor_name = 'A_' + str(i) + '_' + str(j) + '_' + str(m) + '_' + str(n)
-                    sensor_names.append(sensor_name)
-                    pos = chama.sensors.Stationary(location=((i + 1) * 10 + 1, (j + 1) * 10, m))
-                    if n == 0:
-                        sensor_threshold = sensor_threshold  # regular sensor
-                        sensor_cost = 10000
-                    # elif n == 1:
-                    #     sensor_threshold = 0.01  # high sensitivity sensor
-                    #     sensor_cost = 100000
+def prepare_forward_input(geox, geoy, geoz, src_gt, zlayer, vp):
+    """
+    prepare_forward_input(): format input for forward simulation.
+    geox:array, geoy:array, geoz:array-coordinates of geophones|output of psarray.gridarray function
+    src_gt:list-coordinates of microseismic source
+    zlayer:list-depth of strata
+    vp:list-p wave velocity of strata
+    """
+    vp = np.array(vp)
+    sourcex = np.array([src_gt[0]])
+    sourcey = np.array([src_gt[1]])
+    sourcez = np.array([src_gt[2]])
 
-                    sensor_costs.append(sensor_cost)
-                    det = chama.sensors.Point(threshold=sensor_threshold, sample_times=list(range(24)))
-                    stationary_pt_sensor = chama.sensors.Sensor(position=pos, detector=det)
-                    sensor_candidates[sensor_name] = stationary_pt_sensor
-                    # print('count: ', count)
-                    count = count + 1
+    # observation forward
+    nt = len(geox)
+    #  S wave velocity based on Castagna's rule
+    # vs = (vp - 1360) / 1.16
+    #  S wave velocity based on literature:
+    #  2019 Optimal design of microseismic monitoring network: Synthetic study for the Kimberlina CO2 storage demonstration site
+    vs = vp / 1.73
 
-    sensor_cost_pairs = pd.DataFrame({'Sensor': sensor_names, 'Cost': sensor_costs})
-    print('sensors candidates have been configured!')
-    return sensor_candidates, sensor_cost_pairs
+    # 3D passive seismic raytracing
+    dg = 10
+    src = np.array([sourcex, sourcey, sourcez]).T
+    rcv = np.array([geox, geoy, geoz]).T
+    return vp, vs, zlayer, dg, src, rcv
 
 
-def extract_min_detect_time(signal, sensor_candidates):
-    det_times = chama.impact.extract_detection_times(signal, sensor_candidates)
+class SingleEventForwarder():
+    def __init__(self, vp, vs, zlayer, dg, rcv):
+        self.ptimes_obs = None  # instance variable unique to each instance
+        self.forward_counter = 0  # instance variable unique to each instance
+        self.vp = vp
+        self.vs = vs
+        self.zlayer = zlayer
+        self.dg = dg
+        self.rcv = rcv
 
-    #  extract statistic of detection time
-    det_time_stats = chama.impact.detection_time_stats(det_times)
-    #  extract the min detect time
-    min_det_time = det_time_stats[['Scenario', 'Sensor', 'Min']]
-    min_det_time = min_det_time.rename(columns={'Min': 'Impact'})
-    if min_det_time.__len__() == 0:
-        raise ValueError('No signal was detected by any sensor candidates')
+    def forward_obs(self, gt_src):
+        """
+        forward_obs(): forward simulation to get the observation ground truth seismic event arrival time.
+
+        """
+
+        start_time = time.time()
+        print("3D passive seismic raytracing is running[Waiting...]")
+        tps, _, tetas = psraytrace.raytrace(self.vp, self.vs, self.zlayer, self.dg, gt_src, self.rcv)
+        self.ptimes_obs = tps
+        self.forward_counter = self.forward_counter + 1
+
+        print("3D passive seismic raytracing completed[OK]")
+        print("running time: " + str((time.time() - start_time) / 50) + ' mins')
+        return tps
+
+    def timediff(self, tp, tmp):
+        """
+        timediff(): microseismic event location method based on arrival time differences.
+        This method needs to pick first arrival times of microseismic event and
+        generally aims to process high signal-to-noise ratio.
+
+        """
+        tpdiff = abs(np.diff(tp, axis=0))
+        tmpdiff = abs(np.diff(tmp, axis=0))
+
+        temp = np.square(tpdiff - tmpdiff)
+        sumErrs = np.cumsum(temp)
+        minErr = sumErrs[len(sumErrs) - 1]
+        return minErr
+
+    def forward_source_pred_error(self, pre_src):
+        """
+        time_diff_Err(): try different source location to see error of simulated arrival time.
+
+        """
+        sx = [pre_src[0][0]]
+        sy = [pre_src[1][0]]
+        sz = [pre_src[2][0]]
+
+        if sz[0] in self.zlayer + 1:
+            sz[0] = sz[0] + 1
+
+        try_src = np.array([sx, sy, sz]).T
+
+        print('try_src: ', try_src)
+        print("3D passive seismic raytracing example is running[Waiting...]")
+        tps, _, tetas = psraytrace.raytrace(self.vp, self.vs, self.zlayer, self.dg, try_src, self.rcv)
+        self.forward_counter = self.forward_counter + 1
+        print("3D passive seismic raytracing completed[OK]")
+        # tps = tps / dt
+
+        minErr = self.timediff(tps, self.ptimes_obs)
+
+        return float(minErr)
+
+
+def seismic_event_simulation(vp, event_positions,geo_sensor_candidates_positions, zlayer, e_name='Event'):
+    """input: grid, atmosphere model, leak lists"""
+    Sensor_name_list = []
+    Impact_list = []
+    Scenario_name_list = []
+
+
+    fault_x = event_positions[0]
+    fault_y = event_positions[1]
+    fault_z = event_positions[2]
+
+    for i in range(len(fault_x)):
+        event_name = e_name + '_' + str(int(fault_x[i])) + '_' + str(int(fault_y[i])) + '_' + str(int(fault_z[i]))
+        # Generate square grid array
+        geox, geoy, geoz = geo_sensor_candidates_positions[0], geo_sensor_candidates_positions[1], geo_sensor_candidates_positions[2]
+        # # Define geological model
+        # zlayer = np.array([0, 540, 1070, 1390, 1740, 1950, 2290,
+        #                    2630, 4000])
+
+        # Define source coordinates
+        source = [fault_x[i], fault_y[i], fault_z[i]]
+
+
+        # Define velocity model
+        # P wave velocity
+        # vp = vp
+
+        # formatting the input for forward
+        vp, vs, zlayer, dg, src, rcv = prepare_forward_input(geox, geoy, geoz, source, zlayer, vp)
+
+        # run forward simulation
+        forwarder = SingleEventForwarder(vp, vs, zlayer, dg, rcv)
+        event_min_detect_time = forwarder.forward_obs(src)
+
+        # each sensor's record
+        for sensor_idx in range(len(geox)):
+            name_sensor = 'sensor_' + str(int(geox[sensor_idx])) + '_' + str(int(geoy[sensor_idx])) + '_' + str(
+                int(geoz[sensor_idx]))
+            event_sensor_impact = event_min_detect_time[sensor_idx]
+            Scenario_name_list.append(event_name)
+            Sensor_name_list.append(name_sensor)
+            Impact_list.append(event_sensor_impact)
+    min_det_time = pd.DataFrame({'Scenario': Scenario_name_list, 'Sensor': Sensor_name_list, 'Impact': Impact_list})
     return min_det_time
-
 
 def optimize_sensor(min_det_time, sens_cost_pairs, event_probs, sens_budget):
     #  optimization impact formulation
@@ -105,7 +200,6 @@ def optimize_sensor(min_det_time, sens_cost_pairs, event_probs, sens_budget):
                                use_sensor_cost=True)
     print('sensor placement strategy has been generated!')
     return results
-
 
 def eval_sensor_placement(min_det_time, sens_cost_pairs, event_probs, placed_sensor_set):
     #  optimization impact formulation
@@ -119,213 +213,179 @@ def eval_sensor_placement(min_det_time, sens_cost_pairs, event_probs, placed_sen
     return results
 
 
-def wasserstein_upper_bound(distribution, confidential_level=0.9):
-    # distribution: empirical distribution
-    # gamma: Confidence level
-    # (high gamma, more sample)->high shift
-    len_distribution = float(distribution.__len__())
-    S = len_distribution  # Number of historical data for empirical distribution
-    H = len_distribution  # Number of bins for empirical distribution
-    kappa = (H / (2 * S)) * np.log(2 * H / (1 - confidential_level))
-
-    def func(x):
-        return [wasserstein_distance([x[0]], distribution) - kappa]
-
-    spike_distribution = fsolve(func, [max(distribution)])
-    if spike_distribution >= np.mean(distribution):
-        upper_bound_result = spike_distribution
-    else:
-        raise ValueError('wasserstein_distance is not upper bond.')
-
-    return upper_bound_result[0]
 
 
-def eliminate_missing_leak_events(opt_results, leak_positions, leak_heights, leak_rates):
-    covered_scenario_number = int(np.where(opt_results['Assessment']['Sensor'].values == None)[0][0])
-    print('Detected scenarios: ', covered_scenario_number)
-    scenario_names_cache = opt_results['Assessment']['Scenario'].values[:covered_scenario_number]
-    new_leak_positions = []
-    new_leak_heights = []
-    new_leak_rates = []
-    for detect_scenario in scenario_names_cache:
-        s_idx = int(detect_scenario.split('S')[-1])
-        leak_point = leak_positions[s_idx]
-        leak_h = leak_heights[s_idx]
-        leak_r = leak_rates[s_idx]
-        new_leak_positions.append(leak_point)
-        new_leak_heights.append(leak_h)
-        new_leak_rates.append(leak_r)
-    return new_leak_positions, new_leak_heights, new_leak_rates
+# %% create impact panda df for optimization on basic seismic events set
 
 
-def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma):
-    # %% parameter and configuration preparing
-    # environment: grid
-    leak_pdf_file = './data/raw/leak_pdf.csv'
-
-    # TOTAL_EVENTS_NUM = 50
-    # num_test_sample = 5
-    # random_seed = 800
-    # gamma = 0.9
-
-    TOTAL_EVENTS_NUM = TOTAL_EVENTS_NUM
-    num_train_sample = num_train_sample
-    num_test_sample = num_test_sample
-    random_seed = random_seed
-    gamma = gamma
-
-    x_grid = np.linspace(0, 99, 100)
-    y_grid = np.linspace(0, 99, 100)
-    z_grid = np.linspace(0, 9, 10)
-    grid_init = chama.simulation.Grid(x_grid, y_grid, z_grid)
-    # environment: wind
-    wind_speed_mean = [6.72, 8.87, 9.73, 9.27, 7.43, 6.73, 6.05, 6.36, 7.89, 8.78, 9.09, 8.29, 8.44, 8.93, 8.38, 10.71,
-                       7.95, 7.64, 6.17, 6.26, 5.65, 8.63, 7.83, 7.18]
-    wind_speed_test_std = 1.3837437106919512
-    wind_speed_train_std = 0.6918718553459756
-    wind_direction = [177.98, 185.43, 185.43, 184.68, 183.19, 182.45, 175.75, 178.72, 180.96, 198.09, 212.98, 224.15,
-                      268.09, 277.77, 272.55, 272.55, 275.53, 281.49, 282.98, 298.62, 284.47, 332.13, 341.06, 337.34]
-    time_points = 24
-    atm_mean = pd.DataFrame({'Wind Direction': wind_direction,
-                             'Wind Speed': wind_speed_mean,
-                             'Stability Class': ['A'] * time_points}, index=list(np.array(range(time_points))))
-    # test wind speed samples
-    np.random.seed(random_seed)
-    wind_speed_test = sample_wind_speed(num_test_sample, wind_speed_mean, wind_speed_test_std)
-    wind_speed_train = sample_wind_speed(num_train_sample, wind_speed_mean, wind_speed_train_std)
-
-    # source: potential source location
-    leak_positions_init = [[25, 75], [75, 75], [65, 60], [25, 50], [45, 50], [75, 50], [25, 25], [40, 35], [60, 45],
-                           [75, 25]]
-    leak_positions_init = leak_positions_init * int(TOTAL_EVENTS_NUM / 10)
-
-    # source: potential leak rate
-    with open(leak_pdf_file) as leakfile:
+def gap_obj_f(num_train_sample, num_test_sample, random_seed, gamma, v_test_std, v_train_std, fault_x_start, fault_y_start, fault_depth, fault_length):
+    with open('./data/raw/fault_poso_creek_location.csv') as leakfile:
         csvreader = csv.reader(leakfile)
         rows = []
         for row in csvreader:
             rows.append(row)
-    leak_pdf = []
-    for rate in rows[1:]:
-        leak_pdf.append([float(rate[0]), float(rate[1])])
+    seismic_events_positions = []
+    for coordinate in rows[1:]:
+        seismic_events_positions.append([int(10*float(coordinate[0])), int(float(coordinate[1]))])
 
-    leak_rate_list = np.array(leak_pdf)[:, 0]
-    leak_prob_list = np.array(leak_pdf)[:, 1]
+    # fault 1
+    fault_1_x = fault_x_start + fault_length*(np.array(seismic_events_positions).T[0] - np.array(seismic_events_positions).T[0][0])/(np.array(seismic_events_positions).T[0][-1] - np.array(seismic_events_positions).T[0][0])
+    fault_1_y = fault_y_start + fault_length*(np.array(seismic_events_positions).T[1] - np.array(seismic_events_positions).T[1][0])/(np.array(seismic_events_positions).T[1][-1] - np.array(seismic_events_positions).T[1][0])
+    fault_1_z = np.zeros(len(fault_1_x)) + fault_depth
 
-    # Choose elements with different probabilities
+    fault_x = fault_1_x
+    fault_y = fault_1_y
+    fault_z = fault_1_z
+
+
+    # num_train_sample = 4
+    # num_test_sample = 8
+    # random_seed = 16
+    # gamma = 0.9
+    # v_test_std = 500
+    # v_train_std = 200
+    geox, geoy, geoz = psarray.gridarray(81, 10000, 10000)
+
+    # Define geological model
+    zlayer = np.array([0, 540, 1070, 1390, 1740, 1950, 2290,
+                       2630, 4000])
+
+    # Define velocity model
+    # P wave velocity
+    vp = np.array([2100, 2500, 2950, 3300, 3700, 4200,
+                   4700, 5800])
+    event_positions = [fault_x, fault_y, fault_z]
+    geo_sensor_candidates_positions = [geox, geoy, geoz]
+    min_det_time = seismic_event_simulation(vp, event_positions,geo_sensor_candidates_positions, zlayer, e_name='Event')
+
+
+    # create scenario panda db for optimization on basic seismic events set
+    Impact_list = min_det_time['Impact']
+    Scenario_name_list_no_redundant = list(set(min_det_time['Scenario']))
+    Scenario_name_list_no_redundant.sort()
+    Undetected_Impact_list = []
+    Scenario_Probability_list = []
+    for event in Scenario_name_list_no_redundant:
+        Undetected_Impact_list.append(10*max(Impact_list))
+        Scenario_Probability_list.append(float(1/len(Scenario_name_list_no_redundant)))
+
+    scenario_prob_basic = pd.DataFrame(
+        {'Scenario': Scenario_name_list_no_redundant, 'Undetected Impact': Undetected_Impact_list, 'Probability': Scenario_Probability_list})
+    # create sensor_cost panda df for optimization on basic seismic events set
+    sensor_cost_list = []
+    Sensor_name_list = []
+    for sensor_idx in range(len(geox)):
+        name_sensor = 'sensor_' + str(int(geox[sensor_idx])) + '_' + str(int(geoy[sensor_idx])) + '_' + str(
+            int(geoz[sensor_idx]))
+        name_sensor = 'sensor_' + str(int(geox[sensor_idx])) + '_' + str(int(geoy[sensor_idx])) + '_' + str(
+            int(geoz[sensor_idx]))
+        Sensor_name_list.append(name_sensor)
+        sensor_cost_list.append(1000)
+    sensor_cost_pairs = pd.DataFrame({'Sensor': Sensor_name_list, 'Cost': sensor_cost_list})
+    # %% optimization
+    sens_budget = 9000
+    mean_basic_results = optimize_sensor(min_det_time, sensor_cost_pairs, scenario_prob_basic, sens_budget)
+    mean_sensor_place_strategy = mean_basic_results['Sensors']
+    print(mean_sensor_place_strategy)
+    print(mean_basic_results['Objective'])
+
+    # evaluate grid sensor placement with events set
+    # grid placement strategy
+    geox, geoy, geoz = psarray.gridarray(9, 10000, 10000)  # extract sensor in placed positions
+    placed_sensor_x = np.array(geox, dtype=np.int)
+    placed_sensor_y = np.array(geoy, dtype=np.int)
+    placed_sensor_z = np.array(geoz, dtype=np.int)
+    grid_sensor_place_strategy = []
+    for i in range(len(placed_sensor_x)):
+        sensor_name = 'sensor_'+str(placed_sensor_x[i]) + '_' + str(placed_sensor_y[i]) + '_'+ str(placed_sensor_z[i])
+        grid_sensor_place_strategy.append(sensor_name)
+
+    # eval
+    grid_basic_result = eval_sensor_placement(min_det_time, sensor_cost_pairs, scenario_prob_basic, grid_sensor_place_strategy)
+    grid_obj = grid_basic_result['Objective']
+    print(grid_obj)
+
+    # evaluate robustness of SO placement when facing perturbation
+    # simulation events with noise
+    # num_v_samples = 1
+    # vp_mean = np.array([2100, 2500, 2950, 3300, 3700, 4200,
+    #                 4700, 5800])
+    # vp_std = 500
+    # np.random.seed(16)
+    # v_samples = sample_velocity_model(num_v_samples, vp_mean, vp_std)
+    # v_noise = v_samples[0]
+    # noise_min_det_time = seismic_event_simulation(v_noise, event_positions,geo_sensor_candidates_positions, zlayer, e_name='Event')
+    # # test
+    # mean_noise_test_results = eval_sensor_placement(noise_min_det_time, sensor_cost_pairs, scenario_prob_basic, so_mean_sensor_place_strategy)
+    # print('so_noise_test_results obj: ', mean_noise_test_results['Objective'])
+
+    #  DRO: MEAN test, DRO train/test,SO train/test
+
+
+    vp_mean = np.array([2100, 2500, 2950, 3300, 3700, 4200,
+                    4700, 5800])
+    # test wind speed samples
     np.random.seed(random_seed)
-    leak_rates_init = np.random.choice(list(leak_rate_list), TOTAL_EVENTS_NUM,
-                                       p=list(leak_prob_list) / leak_prob_list.sum())
-    # print(leak_rates_init)
-    # Choose elements with different probabilities
-    np.random.seed(random_seed)
-    leak_heights_init = np.random.choice([0, 1, 2], TOTAL_EVENTS_NUM, p=[0.33, 0.33, 0.34])
-    # print(leak_heights_init)
-    # sensor
-    sensor_thsh = 0.1
-    sensor_budget = 100000
-    # %% optimize sensor placement based on the mean wind speed (mean optimization)|(basic dataset)
-    """input grid, mean_atm, leak_positions, sampleLeakHeights, sampleLeakRates"""
+    vp_samples_train = sample_velocity_model(num_train_sample, vp_mean, v_train_std)
+    vp_samples_test = sample_velocity_model(num_test_sample, vp_samples_train[0], v_test_std)
 
-    signals_m, scenario_m = leak_simulation(grid_init, atm_mean, leak_positions_init, leak_heights_init,
-                                            leak_rates_init)
-    sensors, sensor_cost_pairs_m = generate_sensor_candidates(sensor_thsh)
-    min_det_time_m = extract_min_detect_time(signals_m, sensors)
-
-    opt_result_m = optimize_sensor(min_det_time_m, sensor_cost_pairs_m, scenario_m, sensor_budget)
-
-    # repeat simulation to eliminate missing events
-    leak_positions_set, leak_heights_set, leak_rates_set = eliminate_missing_leak_events(opt_result_m,
-                                                                                         leak_positions_init,
-                                                                                         leak_heights_init,
-                                                                                         leak_rates_init)
-    signals_m, scenario_probs_m = leak_simulation(grid_init, atm_mean, leak_positions_set, leak_heights_set,
-                                                  leak_rates_set)
-    min_det_time_m = extract_min_detect_time(signals_m, sensors)
-    opt_result_m = optimize_sensor(min_det_time_m, sensor_cost_pairs_m, scenario_probs_m, sensor_budget)
-    # %% check optimization result on basic leak events set (associate to the mean wind sample trace)
-    covered_scenario_number_m = int(np.where(opt_result_m['Assessment']['Sensor'].values != None)[0][-1] + 1)
-    total_scenario_number_m = opt_result_m['Assessment']['Sensor'].values.__len__()
-
-    accuracy_basic = covered_scenario_number_m / total_scenario_number_m
-
-    # print('check optimization result on basic leak events set (associate to the mean wind sample trace)')
-    # print('sensor placement for mean wind: ', opt_result_m['Sensors'])
-    # print('Objective of mean sensor placement: ', opt_result_m['Objective'])
-    # print('covered_scenario_number_m: ', covered_scenario_number_m)
-    # print('total_scenario_number: ', total_scenario_number)
-    # %%  test on the noisy test data: perturbation wind speed (basic dataset * number of testing samples)
+    # test on the noisy test dataset: perturbation wind speed (basic dataset * number of testing samples)
     for i in tqdm(range(num_test_sample), leave=False):
         # use perturbation wind speed
-        wind_speed = wind_speed_test[i]
-        atm = pd.DataFrame({'Wind Direction': wind_direction,
-                            'Wind Speed': wind_speed,
-                            'Stability Class': ['A'] * time_points}, index=list(np.array(range(time_points))))
+        v_noise = vp_samples_test[i]
 
-        # current sample's impact dataframe-basic dataset with one wind sample (a line) for test
-        signals, scenario = leak_simulation(grid_init, atm, leak_positions_set, leak_heights_set, leak_rates_set,
-                                            event_name='Sample' + str(i) + '_S')
-        min_det_time_currt_sample = extract_min_detect_time(signals, sensors)
+        min_det_time_currt_sample = seismic_event_simulation(v_noise, event_positions,geo_sensor_candidates_positions, zlayer, e_name='Sample' + str(i) + '_Event')
         if i == 0:
             # prepare test events dataframe
-            scenario_samples_test = scenario
             min_det_time_samples_test = min_det_time_currt_sample
             # prepare statistic distribution of detection for DRO correction
         else:
             # prepare test events dataframe
-            scenario_samples_test = scenario_samples_test.append(scenario)
             min_det_time_samples_test = min_det_time_samples_test.append(min_det_time_currt_sample)
     # eval
-    scenario_samples_test['Probability'] = scenario_samples_test['Probability'] / scenario_samples_test.__len__()
-    mean_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs_m,
-                                             scenario_samples_test,
-                                             opt_result_m['Sensors'])
-    # %% check mean wind optimization result on testing events set (perturbation wind speed)
-    covered_scenario_number_m_test = int(np.where(
-        mean_test_result['Assessment']['Sensor'].values is not None)[0][-1] + 1)
-    total_scenario_number_m_test = mean_test_result['Assessment']['Sensor'].values.__len__()
 
-    accuracy_m_test = covered_scenario_number_m_test / total_scenario_number_m_test
+    #  create scenario panda db for mean test on test dataset
+    Impact_list = min_det_time_samples_test['Impact']
+    Scenario_name_list_no_redundant = list(set(min_det_time_samples_test['Scenario']))
+    Scenario_name_list_no_redundant.sort()
+    Undetected_Impact_list = []
+    Scenario_Probability_list = []
+    for event in Scenario_name_list_no_redundant:
+        Undetected_Impact_list.append(10*max(Impact_list))
+        Scenario_Probability_list.append(float(1/len(Scenario_name_list_no_redundant)))
 
-    # print('check mean wind optimization result on test events set (perturbated wind speed)')
-    # print('sensor placement for mean wind: ', mean_method_on_noise_eval_result['Sensors'])
-    # print('Objective of mean sensor placement: ', mean_method_on_noise_eval_result['Objective'])
-    # print('covered_scenario_number_m: ', covered_scenario_number_m)
-    # print('total_scenario_number: ', total_scenario_number_m)
-    # print('accuracy of mean method: ', accuracy_m)
-    # %% prepare samples stat for DRO training and multiple samples optimization method
+    scenario_prob_test = pd.DataFrame(
+        {'Scenario': Scenario_name_list_no_redundant, 'Undetected Impact': Undetected_Impact_list, 'Probability': Scenario_Probability_list})
+
+    mean_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+                                             scenario_prob_test,
+                                             mean_sensor_place_strategy)
+    #  stat multi events for training DRO/SO
     impact_stat_dict = {}  # dictionary to store distribution of each event-sensor's impact
     for i in tqdm(range(num_train_sample), leave=False):
         # use perturbation wind speed
-        wind_speed = wind_speed_train[i]
-        atm = pd.DataFrame({'Wind Direction': wind_direction,
-                            'Wind Speed': wind_speed,
-                            'Stability Class': ['A'] * time_points}, index=list(np.array(range(time_points))))
+        # use perturbation wind speed
+        v_noise = vp_samples_test[i]
 
-        # current sample's impact dataframe-basic dataset with one wind sample (a line) for train
-        signals, scenario = leak_simulation(grid_init, atm, leak_positions_set, leak_heights_set, leak_rates_set,
-                                            event_name='Sample' + str(i) + '_S')
-        min_det_time_currt_sample = extract_min_detect_time(signals, sensors)
+        min_det_time_currt_sample = seismic_event_simulation(v_noise, event_positions, geo_sensor_candidates_positions,
+                                                             zlayer, e_name='Sample' + str(i) + '_Event')
+
 
         # update distribution of each event-sensor pair
         for j in tqdm(range(min_det_time_currt_sample.__len__())):
             row = min_det_time_currt_sample.iloc[j]
-            name_sample_sensor_pair = row['Scenario'].split('_')[-1] + '|' + row['Sensor']
+            name_sample_sensor_pair = 'Event_' + row['Scenario'].split('Event_')[-1] + '|' + row['Sensor']
             if name_sample_sensor_pair in impact_stat_dict:
                 impact_stat_dict[name_sample_sensor_pair].append(row['Impact'])
-
             else:
                 impact_stat_dict[name_sample_sensor_pair] = [row['Impact']]
 
-        # training dataset build
         if i == 0:
             # prepare test events dataframe
-            scenario_samples_train = scenario
             min_det_time_samples_train = min_det_time_currt_sample
             # prepare statistic distribution of detection for DRO correction
         else:
             # prepare test events dataframe
-            scenario_samples_train = scenario_samples_train.append(scenario)
             min_det_time_samples_train = min_det_time_samples_train.append(min_det_time_currt_sample)
 
         # statistic dataframe of impact distributions (training dataset)
@@ -343,20 +403,28 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
         stat_df_min_det_time = pd.DataFrame({'Scenario': scenario_stat_list,
                                              'Sensor': sensor_stat_list,
                                              'Impact': impact_stat_list})
-    # %% DRO sensor placement on training dataset
-    dro_sensors = []
+
+    # create scenario_prob_train for training dataset
+    Impact_list = min_det_time_samples_train['Impact']
+    Scenario_name_list_no_redundant = list(set(min_det_time_samples_train['Scenario']))
+    Scenario_name_list_no_redundant.sort()
+    Undetected_Impact_list = []
+    Scenario_Probability_list = []
+    for event in Scenario_name_list_no_redundant:
+        Undetected_Impact_list.append(10*max(Impact_list))
+        Scenario_Probability_list.append(float(1/len(Scenario_name_list_no_redundant)))
+
+    scenario_prob_train = pd.DataFrame(
+        {'Scenario': Scenario_name_list_no_redundant, 'Undetected Impact': Undetected_Impact_list, 'Probability': Scenario_Probability_list})
+
+    #  stat to panda df detection time
+
     dro_impact = []
     for i in range(stat_df_min_det_time.__len__()):
-        # extract the active sensors
-        # act_sensor_list_per_event = stat_df_min_det_time.iloc[i]['Sensor']
-        # robust_sensor = pd.value_counts(act_sensor_list_per_event).keys()[0]
-        # robust_sensor_idxs = list(np.where(act_sensor_list_per_event == robust_sensor)[0])
-        # extract this sensor's impact distribution
-        # impact_distribution = np.array([stat_df_min_det_time.iloc[i]['Impact'][j] for j in robust_sensor_idxs])
         impact_distribution = stat_df_min_det_time.iloc[i]['Impact']
 
         # DRO impact correction
-        robust_impact_value = wasserstein_upper_bound(impact_distribution, gamma)
+        robust_impact_value = Wasserstein_upper_bound(impact_distribution, num_bins=5, gamma=gamma)
 
         # dro_sensors.append(robust_sensor)
         dro_impact.append(robust_impact_value)
@@ -364,57 +432,67 @@ def main(TOTAL_EVENTS_NUM, num_train_sample, num_test_sample, random_seed, gamma
     min_det_time_dro = pd.DataFrame({'Scenario': scenario_stat_list,
                                      'Sensor': sensor_stat_list,
                                      'Impact': list(dro_impact)})
-    opt_result_dro = optimize_sensor(min_det_time_dro, sensor_cost_pairs_m, scenario_probs_m, sensor_budget)
-    # %% evaluate dro placement strategy on test dataset
 
-    dro_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs_m, scenario_samples_test,
-                                            opt_result_dro['Sensors'])
-    # %% check dro optimization result on test events set (perturbated wind speed)
-    covered_scenario_number_dro = int(
-        np.where(dro_test_result['Assessment']['Sensor'].values != None)[0][-1] + 1)
-    total_scenario_number_dro = dro_test_result['Assessment']['Sensor'].values.__len__()
-    accuracy_dro_test = covered_scenario_number_dro / total_scenario_number_dro
+    # DRO optimization: placement
+    opt_result_dro = optimize_sensor(min_det_time_dro, sensor_cost_pairs, scenario_prob_basic, sens_budget)
+    dro_sensor_place_strategy = opt_result_dro['Sensors']
 
-    # print('check dro optimization result on test events set (perturbated wind speed)')
-    # print('sensor placement for mean wind: ', dro_method_on_noise_eval_result['Sensors'])
-    # print('Objective of mean sensor placement: ', dro_method_on_noise_eval_result['Objective'])
-    # print('covered_scenario_number_dro: ', covered_scenario_number_dro)
-    # print('total_scenario_number_dro: ', total_scenario_number_dro)
-    # print('accuracy of dro method: ', accuracy_dro)
-    # %% naive optimization placement on training dataset
-    scenario_samples_train['Probability'] = scenario_samples_train['Probability'] / scenario_samples_train.__len__()
-    naive_opt_train_result = optimize_sensor(min_det_time_samples_train, sensor_cost_pairs_m,
-                                             scenario_samples_train, sensor_budget)
-    covered_scenario_number_naive_opt_train = int(np.where(
-        naive_opt_train_result['Assessment']['Sensor'].values is not None)[0][-1] + 1)
-    total_scenario_number_naive_opt_train = naive_opt_train_result['Assessment']['Sensor'].values.__len__()
-    accuracy_naive_opt_train = covered_scenario_number_naive_opt_train / total_scenario_number_naive_opt_train
+    # evaluate dro placement strategy on test dataset
+    dro_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
+                                             scenario_prob_train,
+                                             dro_sensor_place_strategy)
 
-    # %% naive optimization placement (train on training dataset) test on testing dataset
+    dro_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+                                             scenario_prob_test,
+                                             dro_sensor_place_strategy)
 
-    naive_opt_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs_m, scenario_samples_test,
-                                                  naive_opt_train_result['Sensors'])
-    covered_scenario_number_naive_opt_test = int(np.where(
-        naive_opt_test_result['Assessment']['Sensor'].values is not None)[0][-1] + 1)
-    total_scenario_number_naive_opt_test = naive_opt_test_result['Assessment']['Sensor'].values.__len__()
-    accuracy_naive_opt_test = covered_scenario_number_naive_opt_test / total_scenario_number_naive_opt_test
+    #  SO optimization on training and evaluaiton on training and testing
+    opt_result_so = optimize_sensor(min_det_time_samples_train, sensor_cost_pairs, scenario_prob_train, sens_budget)
+    so_sensor_place_strategy = opt_result_so['Sensors']
+    # evaluation mean method on train dataset
+    mean_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
+                                             scenario_prob_train,
+                                             mean_sensor_place_strategy)
+    #  evaluate dro placement strategy on test dataset
+    so_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
+                                             scenario_prob_train,
+                                             so_sensor_place_strategy)
 
-    # %%
-    result_list = [opt_result_m, mean_test_result, dro_test_result, naive_opt_test_result, naive_opt_train_result,
-                   accuracy_basic, accuracy_m_test, accuracy_dro_test,
-                   accuracy_naive_opt_test, accuracy_naive_opt_train]
-    return result_list
+    so_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+                                             scenario_prob_test,
+                                             so_sensor_place_strategy)
+
+    # eval grid on test dataset
+    grid_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs, scenario_prob_test, grid_sensor_place_strategy)
+    # expected performance gaps
+
+    gap_1 = mean_basic_results['Objective'] - grid_basic_result['Objective']
+    gap_2 = mean_train_result['Objective'] - mean_test_result['Objective']
+    gap_3 = mean_test_result['Objective'] - grid_test_result['Objective']
+    gap_4 = so_test_result['Objective'] - mean_test_result['Objective']
+    gap_5 = dro_test_result['Objective'] - so_test_result['Objective']
+    gap_6 = dro_train_result['Objective'] - dro_test_result['Objective']
+    gap_7 = so_train_result['Objective'] - so_test_result['Objective']
 
 
-# %%
+    result_list = [gap_1,  gap_2,gap_3,
+                   gap_4, gap_5,
+                   gap_6, gap_7]
+
 
 
 if __name__ == "__main__":
 
-    TOTAL_EVENTS_NUM_list = [500, 1000]
-    num_test_sample_list = [16]
-    random_seed_list = [1997, 2022]
-    gamma_list = [0.9, 0.8]
+    num_train_sample_list = [4, 8]
+    num_test_sample_list = [6, 9]
+    random_seed_list = [16]
+    gamma_list = [0.7, 0.9]
+    v_test_std_list = [200, 500]
+    v_train_std_list = [200, 500]
+    fault_x_start_list = [2000, 4000]
+    fault_y_start_list = [2000, 4000]
+    fault_depth_list = [1800,  2300]
+    fault_length_list = [2000, 4000]
 
     # good experiment result should be
     """
@@ -429,91 +507,62 @@ if __name__ == "__main__":
     best_obj_gap_2 = 0
     best_obj_gap_3 = 0
     best_obj_gap_4 = 0
+    best_obj_gap_5 = 0
+    best_obj_gap_6 = 0
+    best_obj_gap_7 = 0
 
-    best_accuracy_gap_1 = 0
-    best_accuracy_gap_2 = 0
-    best_accuracy_gap_3 = 0
-    best_accuracy_gap_4 = 0
 
-    for TOTAL_EVENTS_NUM in TOTAL_EVENTS_NUM_list:
+    for num_train_sample in num_train_sample_list:
         for num_test_sample in num_test_sample_list:
             for random_seed in random_seed_list:
                 for gamma in gamma_list:
-                    result_list = main(TOTAL_EVENTS_NUM, int(num_test_sample / 2), num_test_sample, random_seed, gamma)
-
-                    obj_gap_1 = result_list[0]['Objective'] - result_list[1]['Objective']
-                    obj_gap_2 = result_list[2]['Objective'] - result_list[3]['Objective']
-                    obj_gap_3 = result_list[2]['Objective'] - result_list[1]['Objective']
-                    obj_gap_4 = result_list[4]['Objective'] - result_list[3]['Objective']
-
-                    accuracy_gap_1 = result_list[5] - result_list[6]
-                    accuracy_gap_2 = result_list[7] - result_list[8]
-                    accuracy_gap_3 = result_list[7] - result_list[6]
-                    accuracy_gap_4 = result_list[9] - result_list[8]
-
-                    if obj_gap_1 <= best_obj_gap_1 and obj_gap_2 <= best_obj_gap_2 and obj_gap_3 <= best_obj_gap_3 and obj_gap_4 <= best_obj_gap_4 and accuracy_gap_1 >= best_accuracy_gap_1 and accuracy_gap_2 >= best_accuracy_gap_2 and accuracy_gap_3 >= best_accuracy_gap_3 and accuracy_gap_4 >= best_accuracy_gap_4:
-                        best_obj_gap_1 = obj_gap_1
-                        best_obj_gap_2 = obj_gap_2
-                        best_obj_gap_3 = obj_gap_3
-                        best_obj_gap_4 = obj_gap_4
-
-                        best_accuracy_gap_1 = accuracy_gap_1
-                        best_accuracy_gap_2 = accuracy_gap_2
-                        best_accuracy_gap_3 = accuracy_gap_3
-                        best_accuracy_gap_4 = accuracy_gap_4
-
-                        f2 = open('./best_parameters_log.txt', 'r+')
-                        f2.read()
-                        # f2.write("\n result_list[0]['Objective']")
-                        # f2.write('\n ' + str(result_list[0]['Objective']))
-                        # f2.write("\n result_list[1]['Objective']")
-                        # f2.write('\n ' + str(result_list[1]['Objective']))
-                        # f2.write("\n result_list[2]['Objective']")
-                        # f2.write('\n ' + str(result_list[2]['Objective']))
-                        # f2.write("\n result_list[3]['Objective']")
-                        # f2.write('\n ' + str(result_list[3]['Objective']))
-                        # f2.write("\n result_list[4]['Objective']")
-                        # f2.write('\n ' + str(result_list[4]['Objective']))
-                        # f2.write("\n accuracy_gap_1")
-                        # f2.write('\n ' + str(accuracy_gap_1))
-                        # f2.write("\n accuracy_gap_2")
-                        # f2.write('\n ' + str(accuracy_gap_2))
-                        # f2.write("\n accuracy_gap_3")
-                        # f2.write('\n ' + str(accuracy_gap_3))
-                        # f2.write("\n accuracy_gap_4")
-                        # f2.write('\n ' + str(accuracy_gap_4))
-                        #
-                        # f2.write("\n result_list[0]['Sensors']")
-                        # f2.write('\n ' + str(result_list[0]['Sensors']))
-                        # f2.write("\n result_list[1]['Sensors']")
-                        # f2.write('\n ' + str(result_list[1]['Sensors']))
-                        # f2.write("\n result_list[2]['Sensors']")
-                        # f2.write('\n ' + str(result_list[2]['Sensors']))
-                        # f2.write("\n result_list[3]['Sensors']")
-                        # f2.write('\n ' + str(result_list[3]['Sensors']))
-                        # f2.write("\n result_list[4]['Sensors']")
-                        # f2.write('\n ' + str(result_list[4]['Sensors']))
+                    for v_test_std in v_test_std_list:
+                        for v_train_std in v_train_std_list:
+                            for fault_x_start in fault_x_start_list:
+                                for fault_y_start in fault_y_start_list:
+                                    for fault_depth in fault_depth_list:
+                                        for fault_length in fault_length_list:
 
 
-                        f2.write('\n best_obj_gap_1')
-                        f2.write('\n ' + str(best_obj_gap_1))
-                        f2.write('\n best_obj_gap_2')
-                        f2.write('\n ' + str(best_obj_gap_2))
-                        f2.write('\n best_obj_gap_3')
-                        f2.write('\n ' + str(best_obj_gap_3))
-                        f2.write('\n best_obj_gap_4')
-                        f2.write('\n ' + str(best_obj_gap_4))
-                        f2.write('\n best_accuracy_gap_1')
-                        f2.write('\n ' + str(best_accuracy_gap_1))
-                        f2.write('\n best_accuracy_gap_2')
-                        f2.write('\n ' + str(best_accuracy_gap_2))
-                        f2.write('\n best_accuracy_gap_3')
-                        f2.write('\n ' + str(best_accuracy_gap_3))
-                        f2.write('\nbest_accuracy_gap_4')
-                        f2.write('\n ' + str(best_accuracy_gap_4))
-                        f2.write('\n best parameters')
-                        f2.write('\n ' + str(TOTAL_EVENTS_NUM) + ' ' + str(num_test_sample) + ' ' + str(
-                            random_seed) + ' ' + str(gamma))
-                        f2.close()
+                                            result_list = gap_obj_f(num_train_sample, num_test_sample, random_seed, gamma, v_test_std, v_train_std, fault_x_start, fault_y_start, fault_depth, fault_length)
 
 
+
+                                            if result_list[0] <= best_obj_gap_1 and result_list[1] <= best_obj_gap_2 and result_list[2] <= best_obj_gap_3 and result_list[3] <= best_obj_gap_4 and result_list[4] <= best_obj_gap_5 and result_list[5] <= best_obj_gap_6 and result_list[6] >= best_obj_gap_7 :
+                                                best_obj_gap_1 = result_list[0]
+                                                best_obj_gap_2 = result_list[1]
+                                                best_obj_gap_3 = result_list[2]
+                                                best_obj_gap_4 = result_list[3]
+                                                best_obj_gap_5 = result_list[4]
+                                                best_obj_gap_6 = result_list[5]
+                                                best_obj_gap_7 = result_list[6]
+
+                                                f2 = open('./best_parameters_log.txt', 'r+')
+                                                f2.read()
+
+
+                                                f2.write('\n best_obj_gap_1')
+                                                f2.write('\n ' + str(best_obj_gap_1))
+                                                f2.write('\n best_obj_gap_2')
+                                                f2.write('\n ' + str(best_obj_gap_2))
+                                                f2.write('\n best_obj_gap_3')
+                                                f2.write('\n ' + str(best_obj_gap_3))
+                                                f2.write('\n best_obj_gap_4')
+                                                f2.write('\n ' + str(best_obj_gap_4))
+                                                f2.write('\n best_obj_gap_5')
+                                                f2.write('\n ' + str(best_obj_gap_5))
+                                                f2.write('\n best_obj_gap_6')
+                                                f2.write('\n ' + str(best_obj_gap_6))
+                                                f2.write('\n best_obj_gap_7')
+                                                f2.write('\n ' + str(best_obj_gap_7))
+
+                                                f2.write('\n best_parameters')
+                                                f2.write('\n ' + str(num_train_sample) + ' ' + str(num_train_sample) + ' ' + str(
+                                                    random_seed) + ' ' + str(gamma) + ' ' + str(v_test_std)+ ' ' + str(v_train_std)
+                                                         + ' ' + str(fault_x_start)+ ' ' + str(fault_y_start)+ ' ' + str(fault_depth)
+                                                         + ' ' + str(fault_length))
+                                                f2.close()
+
+# %%
+import math
+math.comb(100, 25)
