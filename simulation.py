@@ -324,11 +324,11 @@ print('so_noise_test_results obj: ', mean_noise_test_results['Objective'])
 # %% DRO: MEAN test, DRO train/test,SO train/test
 
 num_train_sample = 4
-num_test_sample = 8
+num_test_sample = 4
 random_seed = 16
 gamma = 0.9
 v_test_std = 500
-v_train_std = 200
+v_train_std = 500
 vp_mean = np.array([2100, 2500, 2950, 3300, 3700, 4200,
                 4700, 5800])
 # test wind speed samples
@@ -336,7 +336,7 @@ np.random.seed(random_seed)
 vp_samples_train = sample_velocity_model(num_train_sample, vp_mean, v_train_std)
 vp_samples_test = sample_velocity_model(num_test_sample, vp_samples_train[0], v_test_std)
 
-# %% test on the noisy test dataset: perturbation wind speed (basic dataset * number of testing samples)
+# %% test dataset: perturbation wind speed (basic dataset * number of testing samples)
 for i in tqdm(range(num_test_sample), leave=False):
     # use perturbation wind speed
     v_noise = vp_samples_test[i]
@@ -363,15 +363,14 @@ for event in Scenario_name_list_no_redundant:
 scenario_prob_test = pd.DataFrame(
     {'Scenario': Scenario_name_list_no_redundant, 'Undetected Impact': Undetected_Impact_list, 'Probability': Scenario_Probability_list})
 
-mean_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
-                                         scenario_prob_test,
-                                         mean_sensor_place_strategy)
+# mean_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+#                                          scenario_prob_test,
+#                                          mean_sensor_place_strategy)
 # %% stat multi events for training DRO/SO
 impact_stat_dict = {}  # dictionary to store distribution of each event-sensor's impact
 for i in tqdm(range(num_train_sample), leave=False):
-    # use perturbation wind speed
-    # use perturbation wind speed
-    v_noise = vp_samples_test[i]
+    # use perturbation velocity
+    v_noise = vp_samples_train[i]
 
     min_det_time_currt_sample = seismic_event_simulation(v_noise, event_positions, geo_sensor_candidates_positions,
                                                          zlayer, e_name='Sample' + str(i) + '_Event')
@@ -394,23 +393,37 @@ for i in tqdm(range(num_train_sample), leave=False):
         # prepare test events dataframe
         min_det_time_samples_train = min_det_time_samples_train.append(min_det_time_currt_sample)
 
-    # statistic dataframe of impact distributions (training dataset)
-    scenario_stat_list = []
-    sensor_stat_list = []
-    impact_stat_list = []
-    for item in impact_stat_dict:
-        scenario_name = item.split('|')[0]
-        sensor_name = item.split('|')[1]
-        impact_det = impact_stat_dict[item]
-        scenario_stat_list.append(scenario_name)
-        sensor_stat_list.append(sensor_name)
-        impact_stat_list.append(impact_det)
-
-    stat_df_min_det_time = pd.DataFrame({'Scenario': scenario_stat_list,
-                                         'Sensor': sensor_stat_list,
-                                         'Impact': impact_stat_list})
 
 # %%
+# statistic dataframe of impact distributions (training dataset)
+scenario_stat_list = []
+sensor_stat_list = []
+impact_stat_list = []
+for item in impact_stat_dict:
+    scenario_name = item.split('|')[0]
+    sensor_name = item.split('|')[1]
+    impact_det = impact_stat_dict[item]
+    scenario_stat_list.append(scenario_name)
+    sensor_stat_list.append(sensor_name)
+    impact_stat_list.append(impact_det)
+stat_df_min_det_time = pd.DataFrame({'Scenario': scenario_stat_list,
+                                     'Sensor': sensor_stat_list,
+                                     'Impact': impact_stat_list})
+
+# %% drop sensor
+import random
+random.seed(0)
+dropped_impact_stat_list = []
+for impact_list in impact_stat_list:
+    # Creating a number list
+    dropped_impact_list = random.choices(impact_list, k=random.randint(1, int(len(impact_list))))
+    # dropped_impact_list = random.choices(impact_list, k=int(len(impact_list)/2))
+    dropped_impact_stat_list.append(dropped_impact_list)
+dropped_stat_df_min_det_time = pd.DataFrame({'Scenario': scenario_stat_list,
+                                     'Sensor': sensor_stat_list,
+                                     'Impact': dropped_impact_stat_list})
+
+# %% scenario_prob_train
 Impact_list = min_det_time_samples_train['Impact']
 Scenario_name_list_no_redundant = list(set(min_det_time_samples_train['Scenario']))
 Scenario_name_list_no_redundant.sort()
@@ -424,10 +437,10 @@ scenario_prob_train = pd.DataFrame(
     {'Scenario': Scenario_name_list_no_redundant, 'Undetected Impact': Undetected_Impact_list, 'Probability': Scenario_Probability_list})
 
 # %% stat to panda df detection time
-
+stat_df_min_det_time_inp = dropped_stat_df_min_det_time
 dro_impact = []
-for i in range(stat_df_min_det_time.__len__()):
-    impact_distribution = stat_df_min_det_time.iloc[i]['Impact']
+for i in range(stat_df_min_det_time_inp.__len__()):
+    impact_distribution = stat_df_min_det_time_inp.iloc[i]['Impact']
 
     # DRO impact correction
     robust_impact_value = Wasserstein_upper_bound(impact_distribution, num_bins=5, gamma=gamma)
@@ -439,9 +452,12 @@ min_det_time_dro = pd.DataFrame({'Scenario': scenario_stat_list,
                                  'Sensor': sensor_stat_list,
                                  'Impact': list(dro_impact)})
 # %% DRO optimization: placement
+sens_budget = 9000
+
 opt_result_dro = optimize_sensor(min_det_time_dro, sensor_cost_pairs, scenario_prob_basic, sens_budget)
 dro_sensor_place_strategy = opt_result_dro['Sensors']
 # %% evaluate dro placement strategy on test dataset
+
 dro_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
                                          scenario_prob_train,
                                          dro_sensor_place_strategy)
@@ -449,14 +465,51 @@ dro_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost
 dro_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
                                          scenario_prob_test,
                                          dro_sensor_place_strategy)
-# %% SO optimization on training and evaluaiton on training and testing
-opt_result_so = optimize_sensor(min_det_time_samples_train, sensor_cost_pairs, scenario_prob_train, sens_budget)
+# %% SO optimization
+so_impact = []
+for i in range(stat_df_min_det_time_inp.__len__()):
+    impact_distribution = stat_df_min_det_time_inp.iloc[i]['Impact']
+
+    # DRO impact correction
+    so_impact_value = np.mean(impact_distribution)
+
+    # dro_sensors.append(robust_sensor)
+    so_impact.append(so_impact_value)
+# dro corrected detect impact dataframe
+min_det_time_so = pd.DataFrame({'Scenario': scenario_stat_list,
+                                 'Sensor': sensor_stat_list,
+                                 'Impact': list(so_impact)})
+
+# %% SO optimization: placement
+opt_result_so = optimize_sensor(min_det_time_so, sensor_cost_pairs, scenario_prob_basic, sens_budget)
 so_sensor_place_strategy = opt_result_so['Sensors']
 # %%
-mean_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
-                                         scenario_prob_train,
-                                         mean_sensor_place_strategy)
-# %% evaluate dro placement strategy on test dataset
+print('dro_sensor_place_strategy: ', dro_sensor_place_strategy)
+print('so_sensor_place_strategy: ', so_sensor_place_strategy)
+# %% plot
+x_event = range(len(min_det_time_so))
+y_impact_so = list(min_det_time_so['Impact'])
+# mean_y_impact_so = sum(y_impact_so)
+# y_impact_so = np.array(y_impact_so)/mean_y_impact_so
+y_impact_so_diff = np.gradient(np.array(y_impact_so))
+
+y_impact_dro = list(min_det_time_dro['Impact'])
+# mean_y_impact_dro = sum(y_impact_dro)
+# y_impact_dro = np.array(y_impact_dro)/mean_y_impact_dro
+y_impact_dro_diff = np.gradient(np.array(y_impact_dro))
+plt.plot(x_event, y_impact_so_diff + 1, label='so')
+plt.plot(x_event, y_impact_dro_diff, label='dro')
+
+
+
+plt.xlabel("events")
+plt.ylabel("impact")
+plt.show()
+# %%
+np.argmax(y_impact_so)
+# %%
+np.argmax(y_impact_dro)
+# %%
 so_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
                                          scenario_prob_train,
                                          so_sensor_place_strategy)
@@ -464,12 +517,40 @@ so_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_
 so_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
                                          scenario_prob_test,
                                          so_sensor_place_strategy)
+
+# %%
+# %%
+dro_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
+                                         scenario_prob_train,
+                                         dro_sensor_place_strategy)
+
+dro_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+                                         scenario_prob_test,
+                                         dro_sensor_place_strategy)
+# # %%
+# mean_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs,
+#                                          scenario_prob_train,
+#                                          mean_sensor_place_strategy)
+# mean_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+#                                          scenario_prob_test,
+#                                          mean_sensor_place_strategy)
 # %%
 # eval grid on test dataset
+grid_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs, scenario_prob_train, grid_sensor_place_strategy)
+
 grid_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs, scenario_prob_test, grid_sensor_place_strategy)
 # %%
+# %%
+print('so_train_result: ', so_train_result['Objective'])
+print('so_test_result: ', so_test_result['Objective'])
+print('dro_train_result: ', dro_train_result['Objective'])
+print('dro_test_result: ', dro_test_result['Objective'])
 
-
+# print('mean_train_result: ', mean_train_result['Objective'])
+# print('mean_test_result: ', mean_test_result['Objective'])
+print('grid_train_result: ', grid_train_result['Objective'])
+print('grid_test_result: ', grid_test_result['Objective'])
+# %%
 gap_1 = mean_basic_results['Objective'] - grid_basic_result['Objective']
 gap_2 = mean_train_result['Objective'] - mean_test_result['Objective']
 gap_3 = mean_test_result['Objective'] - grid_test_result['Objective']
@@ -478,7 +559,65 @@ gap_5 = dro_test_result['Objective'] - so_test_result['Objective']
 gap_6 = dro_train_result['Objective'] - dro_test_result['Objective']
 gap_7 = so_train_result['Objective'] - so_test_result['Objective']
 
-# %%
-result_list = [gap_1,  gap_2,gap_3,
-               gap_4, gap_5,
-               gap_6, gap_7]
+# %% best test dataset searching
+for seed in [16, 1997]:
+    for num_test_sample in [6,8]:
+        for v_test_std in [800]:
+            for test_base_vp_idx in [0]:
+
+                num_test_sample = num_test_sample
+                v_test_std = v_test_std
+                v_train_std = 500
+                vp_mean = np.array([2100, 2500, 2950, 3300, 3700, 4200,
+                                4700, 5800])
+                # test wind speed samples
+                np.random.seed(random_seed)
+                vp_samples_train = sample_velocity_model(num_train_sample, vp_mean, v_train_std)
+                vp_samples_test = sample_velocity_model(num_test_sample, vp_samples_train[test_base_vp_idx], v_test_std)
+
+                # test dataset: perturbation wind speed (basic dataset * number of testing samples)
+                for i in tqdm(range(num_test_sample), leave=False):
+                    # use perturbation wind speed
+                    v_noise = vp_samples_test[i]
+
+                    min_det_time_currt_sample = seismic_event_simulation(v_noise, event_positions,geo_sensor_candidates_positions, zlayer, e_name='Sample' + str(i) + '_Event')
+                    if i == 0:
+                        # prepare test events dataframe
+                        min_det_time_samples_test = min_det_time_currt_sample
+                        # prepare statistic distribution of detection for DRO correction
+                    else:
+                        # prepare test events dataframe
+                        min_det_time_samples_test = min_det_time_samples_test.append(min_det_time_currt_sample)
+
+                Impact_list = min_det_time_samples_test['Impact']
+                Scenario_name_list_no_redundant = list(set(min_det_time_samples_test['Scenario']))
+                Scenario_name_list_no_redundant.sort()
+                Undetected_Impact_list = []
+                Scenario_Probability_list = []
+                for event in Scenario_name_list_no_redundant:
+                    Undetected_Impact_list.append(10 * max(Impact_list))
+                    Scenario_Probability_list.append(float(1 / len(Scenario_name_list_no_redundant)))
+
+                scenario_prob_test = pd.DataFrame(
+                    {'Scenario': Scenario_name_list_no_redundant, 'Undetected Impact': Undetected_Impact_list,
+                     'Probability': Scenario_Probability_list})
+
+                dro_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+                                                        scenario_prob_test,
+                                                        dro_sensor_place_strategy)
+                so_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs,
+                                                       scenario_prob_test,
+                                                       so_sensor_place_strategy)
+                if so_test_result['Objective'] > dro_test_result['Objective']:
+                    f2 = open('./best_parameters_log.txt', 'r+')
+                    f2.read()
+                    f2.write('\n dro placement')
+                    f2.write('\n best_parameters')
+                    f2.write(
+                        '\n ' + str(seed) + ' ' + str(num_test_sample) + ' ' + str(
+                            v_test_std) + ' ' + str(test_base_vp_idx) + ' ' + str(so_test_result['Objective']) + ' ' + str(
+                            dro_test_result['Objective'])
+                        + ' ' + str(so_train_result['Objective']) + ' ' + str(dro_train_result['Objective']) + ' ' + str(
+                            grid_train_result['Objective'])
+                        + ' ' + str(grid_test_result['Objective']))
+                    f2.close()
