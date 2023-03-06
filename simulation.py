@@ -211,15 +211,15 @@ def eval_sensor_placement(min_det_time, sens_cost_pairs, event_probs, placed_sen
 
 # %% read leak position
 import csv
-with open('./data/raw/fault_poso_creek_location.csv') as leakfile:
+with open('./data/raw/fault_three_location.csv') as leakfile:
     csvreader = csv.reader(leakfile)
     rows = []
     for row in csvreader:
         rows.append(row)
 seismic_events_positions = []
 for coordinate in rows[1:]:
-    seismic_events_positions.append([int(10*float(coordinate[0])), int(float(coordinate[1]))])
-
+    seismic_events_positions.append([int(float(coordinate[0])), int(float(coordinate[1]))])
+#%%
 # fault 1
 fault_1_x = 3000 + 4000*(np.array(seismic_events_positions).T[0] - np.array(seismic_events_positions).T[0][0])/(np.array(seismic_events_positions).T[0][-1] - np.array(seismic_events_positions).T[0][0])
 fault_1_y = 2000 + 4000*(np.array(seismic_events_positions).T[1] - np.array(seismic_events_positions).T[1][0])/(np.array(seismic_events_positions).T[1][-1] - np.array(seismic_events_positions).T[1][0])
@@ -228,6 +228,10 @@ fault_1_z = np.zeros(len(fault_1_x)) + 2100
 fault_x = fault_1_x
 fault_y = fault_1_y
 fault_z = fault_1_z
+#%%
+fault_x = np.array(seismic_events_positions).T[0]
+fault_y = np.array(seismic_events_positions).T[1]
+fault_z = np.zeros(len(fault_1_x)) + 2100
 
 # # fault 2
 # fault_2_x = 3000 + 4000*(np.array(seismic_events_positions).T[0] - np.array(seismic_events_positions).T[0][0])/(np.array(seismic_events_positions).T[0][-1] - np.array(seismic_events_positions).T[0][0])
@@ -539,6 +543,7 @@ dro_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_p
 grid_train_result = eval_sensor_placement(min_det_time_samples_train, sensor_cost_pairs, scenario_prob_train, grid_sensor_place_strategy)
 
 grid_test_result = eval_sensor_placement(min_det_time_samples_test, sensor_cost_pairs, scenario_prob_test, grid_sensor_place_strategy)
+
 # %%
 # %%
 print('so_train_result: ', so_train_result['Objective'])
@@ -550,29 +555,22 @@ print('dro_test_result: ', dro_test_result['Objective'])
 # print('mean_test_result: ', mean_test_result['Objective'])
 print('grid_train_result: ', grid_train_result['Objective'])
 print('grid_test_result: ', grid_test_result['Objective'])
-# %%
-gap_1 = mean_basic_results['Objective'] - grid_basic_result['Objective']
-gap_2 = mean_train_result['Objective'] - mean_test_result['Objective']
-gap_3 = mean_test_result['Objective'] - grid_test_result['Objective']
-gap_4 = so_test_result['Objective'] - mean_test_result['Objective']
-gap_5 = dro_test_result['Objective'] - so_test_result['Objective']
-gap_6 = dro_train_result['Objective'] - dro_test_result['Objective']
-gap_7 = so_train_result['Objective'] - so_test_result['Objective']
+
 
 # %% best test dataset searching
 for seed in [16, 1997]:
     for num_test_sample in [6,8]:
-        for v_test_std in [800]:
+        for v_test_std in [800, 500]:
             for test_base_vp_idx in [0]:
 
                 num_test_sample = num_test_sample
                 v_test_std = v_test_std
-                v_train_std = 500
+                # v_train_std = 500
                 vp_mean = np.array([2100, 2500, 2950, 3300, 3700, 4200,
                                 4700, 5800])
                 # test wind speed samples
                 np.random.seed(random_seed)
-                vp_samples_train = sample_velocity_model(num_train_sample, vp_mean, v_train_std)
+                # vp_samples_train = sample_velocity_model(num_train_sample, vp_mean, v_train_std)
                 vp_samples_test = sample_velocity_model(num_test_sample, vp_samples_train[test_base_vp_idx], v_test_std)
 
                 # test dataset: perturbation wind speed (basic dataset * number of testing samples)
@@ -621,3 +619,18 @@ for seed in [16, 1997]:
                             grid_train_result['Objective'])
                         + ' ' + str(grid_test_result['Objective']))
                     f2.close()
+
+                    print('seed: ',seed)
+                    print('num_test_sample:', num_test_sample)
+                    print('v_test_std:', v_test_std)
+                    print('so_train_result: ', so_train_result['Objective'])
+                    print('so_test_result: ', so_test_result['Objective'])
+                    print('dro_train_result: ', dro_train_result['Objective'])
+                    print('dro_test_result: ', dro_test_result['Objective'])
+
+                    # print('mean_train_result: ', mean_train_result['Objective'])
+                    # print('mean_test_result: ', mean_test_result['Objective'])
+                    print('grid_train_result: ', grid_train_result['Objective'])
+                    print('grid_test_result: ', grid_test_result['Objective'])
+                    0/0
+
