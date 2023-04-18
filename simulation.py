@@ -185,6 +185,7 @@ def seismic_event_simulation(vp, event_positions,geo_sensor_candidates_positions
             Scenario_name_list.append(event_name)
             Sensor_name_list.append(name_sensor)
             Impact_list.append(event_sensor_impact)
+    Impact_list = list(np.array(Impact_list).astype('float64'))
     min_det_time = pd.DataFrame({'Scenario': Scenario_name_list, 'Sensor': Sensor_name_list, 'Impact': Impact_list})
     return min_det_time
 

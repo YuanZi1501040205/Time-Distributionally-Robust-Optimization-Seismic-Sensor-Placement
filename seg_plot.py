@@ -106,19 +106,18 @@ class SingleEventForwarder():
         return float(minErr)
 
 
-# %% read leak position
-with open('./data/raw/fault_poso_creek_location.csv') as leakfile:
+# read microseismic locations
+with open('./data/raw/fault_three_location.csv') as leakfile:
     csvreader = csv.reader(leakfile)
     rows = []
     for row in csvreader:
         rows.append(row)
 seismic_events_positions = []
 for coordinate in rows[1:]:
-    seismic_events_positions.append([int(10*float(coordinate[0])), int(float(coordinate[1]))])
+    seismic_events_positions.append([int(float(coordinate[0])), int(float(coordinate[1]))])
 
-# %%normalization
-fault_x = 3000 + 4000*(np.array(seismic_events_positions).T[0] - np.array(seismic_events_positions).T[0][0])/(np.array(seismic_events_positions).T[0][-1] - np.array(seismic_events_positions).T[0][0])
-fault_y = 2000 + 4000*(np.array(seismic_events_positions).T[1] - np.array(seismic_events_positions).T[1][0])/(np.array(seismic_events_positions).T[1][-1] - np.array(seismic_events_positions).T[1][0])
+fault_x = np.array(seismic_events_positions).T[0]
+fault_y = np.array(seismic_events_positions).T[1]
 fault_x = fault_x/1000
 fault_y = fault_y/1000
 # %% plot overview
@@ -157,12 +156,14 @@ for i in range(len(fault_x)):
 fig = plt.figure(figsize=(5, 5), dpi=120)
 # plt.gca().invert_yaxis()
 ax = Axes3D(fig)
-ax.scatter(x_list, y_list, z_list, alpha = 0.8, c='y', label='Sensor Candidates')
-ax.scatter(x_list_leak, y_list_leak, z_list_leak, marker='^',c='b', label='Potential Leak Points')
+ax.view_init(10)
+ax.scatter(x_list, y_list, z_list, alpha = 0.8, marker='d', color='#D98F4E', label='Sensor Candidates')
+ax.scatter(x_list_leak, y_list_leak, z_list_leak, marker='X',color='#3C4E72', label='Potential Leak Points')
 plt.xlim(-1, 11)
 plt.ylim(-1, 11)
 
 
+# plot grid strategy
 
 # 添加坐标轴(顺序是Z, Y, X)
 
@@ -174,70 +175,7 @@ ax.set_zlabel('\nZ\km', fontdict={'size': 12}, linespacing=1)
 ax.set_ylabel('\nY\km', fontdict={'size': 12}, linespacing=1)
 ax.set_xlabel('\nX\km', fontdict={'size': 12}, linespacing=1)
 ax.dist = 13
-plt.savefig('./over view.png')
+
+plt.savefig('./seg over view.png')
 
 plt.show()
-# %%
-# plot event detection time contours
-#导入模块
-import numpy as np
-import matplotlib.pyplot as plt
-
-# Generate square grid array
-geox, geoy, geoz = psarray.gridarray(121, 10000, 10000)
-
-# Define source coordinates
-src_gt = [3000, 2000, 2100]
-# Define geological model
-zlayer = np.array([0, 540, 1070, 1390, 1740, 1950, 2290,
-                   2630, 4000])
-
-# Define velocity model
-# P wave velocity
-vp = np.array([2100, 2500, 2950, 3300, 3700, 4200,
-               4700, 5800])
-
-# formatting the input for forward
-vp, vs, zlayer, dg, src, rcv = prepare_forward_input(geox, geoy, geoz, src_gt, zlayer, vp)
-
-# run forward simulation
-forwarder = SingleEventForwarder(vp, vs, zlayer, dg, rcv)
-event_min_detect_time = forwarder.forward_obs(src)
-
-# %% plot detection time contour
-import matplotlib.tri as tri
-import matplotlib.pyplot as plt
-from matplotlib import rcParams
-rcParams.update({'figure.autolayout': True})
-fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
-CS = plt.tricontour(geox, geoy, event_min_detect_time, 15, linewidths=2.5, colors='k')
-CS2 = plt.tricontourf(geox, geoy, event_min_detect_time, 15, cmap='hot')
-
-ax.clabel(CS, fontsize=25)
-plt.xlabel('X/m', fontsize=25, weight='bold')
-plt.ylabel('Y/m', fontsize=25, weight='bold')
-plt.colorbar(orientation='horizontal').set_label(label='Detection time/s',size=25,weight='bold')
-
-fig.axes[0].tick_params(axis="both", labelsize=25)
-fig.axes[1].tick_params(axis="x", labelsize=25)
-plt.savefig('./event_example.png')
-plt.show()
-plt.clf()
-# %% plot scatter of detection time of surface sensor
-import matplotlib.pyplot as plt
-
-rcParams.update({'figure.autolayout': True})
-fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
-
-plt.scatter(geox,geoy,c=event_min_detect_time, cmap='hot')
-
-
-plt.xlabel('X/m', fontsize=25, weight='bold')
-plt.ylabel('Y/m', fontsize=25, weight='bold')
-plt.colorbar(orientation='horizontal').set_label(label='Detection time/s',size=25,weight='bold')
-
-fig.axes[0].tick_params(axis="both", labelsize=25)
-fig.axes[1].tick_params(axis="x", labelsize=25)
-plt.savefig('./event_example_sensors.png')
-plt.show()
-plt.clf()
