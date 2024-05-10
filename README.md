@@ -6,7 +6,6 @@ This repo aims to use Sensor Placement Optimizer Chama to solve the early alarm 
 
 **UPDATE**
 - 2022.03.02
-    - Fine tuning for DRO>RO.
 
 ## Setup
 pip install chama
